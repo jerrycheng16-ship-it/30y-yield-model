@@ -73,10 +73,10 @@ if run_btn:
             try:
                 fred = Fred(api_key=fred_api_key.strip())
                 
-                # 抓取官方月度序列：失業率、CPI、ISM 製造業指數 (使用正確的官方代號 ISM/MAN_PMI)
+                # 抓取官方月度序列：失業率、CPI、ISM 製造業指數 (使用 NAPM 代號)
                 unrate = fred.get_series('UNRATE')
                 cpi = fred.get_series('CPIAUCSL')
-                ism_pmi = fred.get_series('ISM/MAN_PMI') 
+                ism_pmi = fred.get_series('NAPM') 
                 
                 unrate_df = pd.DataFrame({'Unemployment_Rate': unrate})
                 cpi_df = pd.DataFrame({'CPI': cpi})
