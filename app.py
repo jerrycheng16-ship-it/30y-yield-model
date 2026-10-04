@@ -38,7 +38,7 @@ st.markdown(
 )
 
 st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率總經機器學習預測 (零售銷售驅動)</div>', unsafe_allow_html=True)
-st.markdown("### 【功能說明】透過聖路易聯準會官方 FRED API 抓取真實月度總經數據（失業率、CPI YoY、零售銷售 YoY），結合跨資產動能進行機器學習預測與特徵歸因分析。")
+st.markdown("### 【功能說明】透過聖路易聯準會官方 FRED API 抓取真實月度總經數據（失業率、CPI YoY、零售銷售 YoY），結合跨資產動能，預測「下個月末」的 30 年期公債殖利率走勢與特徵歸因分析。")
 
 # -------------------------------------------------------------
 # 側邊欄參數與 FRED API Key 設定
@@ -141,6 +141,9 @@ if run_btn:
                 train_subset = macro_df.iloc[t - train_window : t]
                 test_row = macro_df.iloc[t]
                 test_date = dates[t]
+                
+                # 明確定義：當期資料日所預測的是「下個月末」
+                target_forecast_date = test_date + pd.offsets.MonthEnd(1)
 
                 if len(train_subset) < 12:
                     continue
@@ -168,7 +171,8 @@ if run_btn:
                 contributions = X_te_scaled[0] * coefs
                 
                 record = {
-                    "Date": test_date,
+                    "Feature_Date": test_date,
+                    "Target_Date": target_forecast_date,
                     "Actual": actual,
                     "Predicted": pred,
                 }
@@ -180,8 +184,8 @@ if run_btn:
 
             results_df = pd.DataFrame(detailed_records)
             if not results_df.empty:
-                results_df["Date"] = pd.to_datetime(results_df["Date"])
-                results_df = results_df.set_index("Date")
+                results_df["Feature_Date"] = pd.to_datetime(results_df["Feature_Date"])
+                results_df = results_df.set_index("Feature_Date")
                 results_df = results_df.loc[pd.to_datetime(target_start_date):pd.to_datetime(target_end_date)]
 
             if results_df.empty:
@@ -198,7 +202,8 @@ if st.session_state.prediction_executed:
     if results_df is not None and not results_df.empty:
         st.markdown('<div class="section-header">📈 美國 30 年期公債殖利率：實際值 vs 機器學習預測值</div>', unsafe_allow_html=True)
         
-        chart_data = results_df[["Actual", "Predicted"]]
+        # 圖表對齊到預測目標日
+        chart_data = results_df.set_index("Target_Date")[["Actual", "Predicted"]]
         chart_data.columns = ["實際 30 年公債殖利率 (^TYX)", "機器學習預測值"]
         st.line_chart(chart_data)
 
@@ -214,27 +219,31 @@ if st.session_state.prediction_executed:
         col3.metric("最新預測殖利率", f"{results_df['Predicted'].iloc[-1]:.2f}%")
 
         # 1. 每月輸入參數與預測結果明細表
-        st.markdown('<div class="section-header">📅 每月輸入參數與預測結果明細表</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-header">📅 每月輸入參數與「下個月預測」結果明細表</div>', unsafe_allow_html=True)
+        st.caption("說明：【當期資料日】代表您取得該組經濟與市場數據的時間點；【預測目標月份】代表模型所預測的下個月末殖利率目標。")
+        
         show_input_df = results_df[[
-            "Actual", "Predicted", 
+            "Target_Date", "Actual", "Predicted", 
             "Unemployment_Rate_Value", "CPI_YoY_Value", "Retail_Sales_YoY_Value",
             "SP500_Mom12M_Value", "USD_Mom12M_Value", "Gold_Mom12M_Value"
         ]].copy()
+        
+        show_input_df["Target_Date"] = pd.to_datetime(show_input_df["Target_Date"]).dt.strftime("%Y-%m-%d")
+        show_input_df.index = show_input_df.index.strftime("%Y-%m-%d")
+        
         show_input_df.columns = [
-            "實際殖利率", "預測殖利率", 
+            "預測目標月份 (下個月)", "實際殖利率", "預測殖利率 (針對下個月)", 
             "失業率(%)", "CPI YoY(%)", "零售銷售 YoY(%)",
             "S&P500動能(%)", "美元動能(%)", "黃金動能(%)"
         ]
-        show_input_df.index = show_input_df.index.strftime("%Y-%m-%d")
         st.dataframe(show_input_df.round(2), use_container_width=True)
 
         # 2. 每個月哪一個參數影響程度最大
         st.markdown('<div class="section-header">🔍 每月參數影響程度分析（正向拉升 / 負向壓抑）</div>', unsafe_allow_html=True)
-        st.caption("說明：數值代表該參數當期對預測結果的專屬「貢獻度大小」（標準化特徵值 × 模型權重）。正值代表推升殖利率，負值代表壓抑殖利率。")
+        st.caption("說明：數值代表該參數當期對預測結果的貢獻度大小（標準化特徵值 × 模型權重）。正值代表推升下個月殖利率，負值代表壓抑。")
 
-        impact_df = results_df[[f"{col}_Impact" for col in feature_cols]].copy()
+        impact_df = results_df.set_index(results_df["Target_Date"].dt.strftime("%Y-%m-%d"))[[f"{col}_Impact" for col in feature_cols]].copy()
         impact_df.columns = feature_cols
-        impact_df.index = impact_df.index.strftime("%Y-%m-%d")
         
         max_impact_col = impact_df.abs().idxmax(axis=1)
         impact_df["影響力最大主因"] = max_impact_col
