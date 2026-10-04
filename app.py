@@ -103,14 +103,14 @@ if run_btn:
             macro_df["TYX"] = df_m["^TYX"]
             
             # 對齊失業率
-            macro_df["Unemployment_Rate"] = unrate_df.resample("ME").last().ffill()
+            macro_df["Unemployment_Rate"] = unrate_df.resample("ME").last()
             
             # 計算精準的 CPI YoY (%)
-            cpi_monthly = cpi_df.resample("ME").last().ffill()
+            cpi_monthly = cpi_df.resample("ME").last()
             macro_df["CPI_YoY"] = cpi_monthly["CPI"].pct_change(12) * 100
             
             # 計算精準的零售銷售年增率 (Retail Sales YoY %)
-            retail_monthly = retail_df.resample("ME").last().ffill()
+            retail_monthly = retail_df.resample("ME").last()
             macro_df["Retail_Sales_YoY"] = retail_monthly["Retail_Sales"].pct_change(12) * 100
 
             # 跨資產過去 12 個月動能 (%)
@@ -121,12 +121,12 @@ if run_btn:
             # 目標變數：未來一個月 30 年公債殖利率
             macro_df["Target_Next_TYX"] = macro_df["TYX"].shift(-1)
             
-            # 核心特徵清單
             feature_cols = [
                 "Unemployment_Rate", "CPI_YoY", "Retail_Sales_YoY", 
                 "SP500_Mom12M", "USD_Mom12M", "Gold_Mom12M"
             ]
-            macro_df = macro_df.dropna(subset=feature_cols)
+            
+            # 💡 關鍵修改：不強制 dropna，保留所有月份（讓抓不到數據的欄位顯示為空值以便排查）
 
             # 2. 機器學習與特徵歸因迴圈
             dates = macro_df.index.sort_values()
@@ -138,47 +138,48 @@ if run_btn:
                 start_idx = max(12, len(dates) // 2)
 
             for t in range(start_idx, len(dates)):
-                train_subset = macro_df.iloc[t - train_window : t]
-                test_row = macro_df.iloc[t]
                 test_date = dates[t]
-                
-                # 明確定義：當期資料日所預測的是「下個月末」
+                test_row = macro_df.iloc[t]
                 target_forecast_date = test_date + pd.offsets.MonthEnd(1)
 
-                if len(train_subset) < 12:
-                    continue
+                # 檢查當期特徵是否有缺失
+                feat_values = test_row[feature_cols].values
+                has_missing = pd.isna(feat_values).any()
 
-                X_tr = train_subset[feature_cols]
-                y_tr = train_subset["Target_Next_TYX"].dropna()
-                
-                common_idx = X_tr.index.intersection(y_tr.index)
-                if len(common_idx) < 12:
-                    continue
-                X_tr = X_tr.loc[common_idx]
-                y_tr = y_tr.loc[common_idx]
+                pred = np.nan
+                impacts = [np.nan] * len(feature_cols)
 
-                X_te = test_row[feature_cols].values.reshape(1, -1)
+                if not has_missing:
+                    # 若當期特徵完整，則進行訓練與預測
+                    train_subset = macro_df.iloc[t - train_window : t].dropna(subset=feature_cols)
+                    if len(train_subset) >= 12:
+                        X_tr = train_subset[feature_cols]
+                        y_tr = train_subset["Target_Next_TYX"].dropna()
+                        common_idx = X_tr.index.intersection(y_tr.index)
+                        
+                        if len(common_idx) >= 12:
+                            X_tr = X_tr.loc[common_idx]
+                            y_tr = y_tr.loc[common_idx]
+                            X_te = test_row[feature_cols].values.reshape(1, -1)
 
-                scaler = StandardScaler()
-                X_tr_scaled = scaler.fit_transform(X_tr)
-                X_te_scaled = scaler.transform(X_te)
+                            scaler = StandardScaler()
+                            X_tr_scaled = scaler.fit_transform(X_tr)
+                            X_te_scaled = scaler.transform(X_te)
 
-                model = RidgeCV(alphas=alphas_range).fit(X_tr_scaled, y_tr)
-                pred = model.predict(X_te_scaled)[0]
-                actual = test_row["Target_Next_TYX"]
+                            model = RidgeCV(alphas=alphas_range).fit(X_tr_scaled, y_tr)
+                            pred = model.predict(X_te_scaled)[0]
+                            coefs = model.coef_
+                            impacts = X_te_scaled[0] * coefs
 
-                coefs = model.coef_
-                contributions = X_te_scaled[0] * coefs
-                
                 record = {
                     "Feature_Date": test_date,
                     "Target_Date": target_forecast_date,
-                    "Actual": actual,
+                    "Actual": test_row["Target_Next_TYX"],
                     "Predicted": pred,
                 }
                 for i, col in enumerate(feature_cols):
                     record[f"{col}_Value"] = test_row[col]
-                    record[f"{col}_Impact"] = contributions[i]
+                    record[f"{col}_Impact"] = impacts[i]
 
                 detailed_records.append(record)
 
@@ -202,12 +203,12 @@ if st.session_state.prediction_executed:
     if results_df is not None and not results_df.empty:
         st.markdown('<div class="section-header">📈 美國 30 年期公債殖利率：實際值 vs 機器學習預測值</div>', unsafe_allow_html=True)
         
-        # 圖表對齊到預測目標日
-        chart_data = results_df.set_index("Target_Date")[["Actual", "Predicted"]]
+        valid_chart_df = results_df.dropna(subset=["Predicted"])
+        chart_data = valid_chart_df.set_index("Target_Date")[["Actual", "Predicted"]]
         chart_data.columns = ["實際 30 年公債殖利率 (^TYX)", "機器學習預測值"]
         st.line_chart(chart_data)
 
-        valid_eval = results_df.dropna(subset=["Actual"])
+        valid_eval = results_df.dropna(subset=["Actual", "Predicted"])
         mse = np.mean((valid_eval["Actual"] - valid_eval["Predicted"]) ** 2) if not valid_eval.empty else 0
         rmse = np.sqrt(mse)
         mae = np.mean(np.abs(valid_eval["Actual"] - valid_eval["Predicted"])) if not valid_eval.empty else 0
@@ -216,11 +217,14 @@ if st.session_state.prediction_executed:
         col1, col2, col3 = st.columns(3)
         col1.metric("平均絕對誤差 (MAE)", f"{mae:.3f}%")
         col2.metric("均方根誤差 (RMSE)", f"{rmse:.3f}%")
-        col3.metric("最新預測殖利率", f"{results_df['Predicted'].iloc[-1]:.2f}%")
+        if not results_df["Predicted"].dropna().empty:
+            col3.metric("最新預測殖利率", f"{results_df['Predicted'].dropna().iloc[-1]:.2f}%")
+        else:
+            col3.metric("最新預測殖利率", "N/A (數據收集中)")
 
-        # 1. 每月輸入參數與預測結果明細表
-        st.markdown('<div class="section-header">📅 每月輸入參數與「下個月預測」結果明細表</div>', unsafe_allow_html=True)
-        st.caption("說明：【當期資料日】代表您取得該組經濟與市場數據的時間點；【預測目標月份】代表模型所預測的下個月末殖利率目標。")
+        # 1. 每月輸入參數與預測結果明細表（保留 9/30，未發布欄位留空）
+        st.markdown('<div class="section-header">📅 每月輸入參數與「下個月預測」結果明細表（含最新未發布列）</div>', unsafe_allow_html=True)
+        st.caption("說明：若 9/30 或最新月份的某些總經數據尚未被官方釋出，該欄位將會保持空白（NaN），方便您直接檢查哪些數據源有落後或收集問題。")
         
         show_input_df = results_df[[
             "Target_Date", "Actual", "Predicted", 
@@ -240,8 +244,6 @@ if st.session_state.prediction_executed:
 
         # 2. 每個月哪一個參數影響程度最大
         st.markdown('<div class="section-header">🔍 每月參數影響程度分析（正向拉升 / 負向壓抑）</div>', unsafe_allow_html=True)
-        st.caption("說明：數值代表該參數當期對預測結果的貢獻度大小（標準化特徵值 × 模型權重）。正值代表推升下個月殖利率，負值代表壓抑。")
-
         impact_df = results_df.set_index(results_df["Target_Date"].dt.strftime("%Y-%m-%d"))[[f"{col}_Impact" for col in feature_cols]].copy()
         impact_df.columns = feature_cols
         
