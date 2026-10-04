@@ -93,7 +93,7 @@ if not fred_api_key:
 
 forecast_horizon = st.sidebar.selectbox("選擇預測天期 (Horizon)", options=[1, 3], format_func=lambda x: f"預測未來 {x} 個月")
 
-train_window = st.sidebar.slider("訓練月數 (Train Window)", min_value=24, max_value=120, value=60, step=12)
+train_window = st.sidebar.slider("訓練月數 (Train Window)", min_value=6, max_value=60, value=36, step=6)
 target_start_date = st.sidebar.date_input("回測開始日期", pd.to_datetime("2020-01-31"))
 target_end_date = st.sidebar.date_input("回測結束日期", pd.to_datetime("2026-12-31"))
 
