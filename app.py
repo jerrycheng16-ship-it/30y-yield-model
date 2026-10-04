@@ -8,7 +8,7 @@ from sklearn.linear_model import RidgeCV
 from fredapi import Fred
 
 # 網頁版面設定
-st.set_page_config(page_title="美國 30 年期公債殖利率總經機器學習預測 (零售銷售驅動)", layout="wide")
+st.set_page_config(page_title="美國 30 年期公債殖利率總經機器學習預測 (通膨預期驅動)", layout="wide")
 
 st.markdown(
     """
@@ -37,8 +37,8 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率總經機器學習預測 (零售銷售驅動)</div>', unsafe_allow_html=True)
-st.markdown("### 【功能說明】透過聖路易聯準會官方 FRED API 抓取真實月度總經數據（失業率、CPI YoY、零售銷售 YoY），結合跨資產動能，預測「下個月末」的 30 年期公債殖利率走勢與特徵歸因分析。")
+st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率總經機器學習預測 (通膨預期驅動)</div>', unsafe_allow_html=True)
+st.markdown("### 【功能說明】透過聖路易聯準會官方 FRED API 抓取真實總經數據（失業率、T5YIE 市場通膨預期、WEI 週經濟指數），結合跨資產動能，預測「下個月末」的 30 年期公債殖利率走勢與特徵歸因分析。")
 
 # -------------------------------------------------------------
 # 側邊欄參數與 FRED API Key 設定
@@ -69,18 +69,18 @@ if run_btn:
     if not fred_api_key:
         st.error("❌ 請先在側邊欄輸入 FRED API Key！")
     else:
-        with st.spinner("正在透過 FRED API 同步官方真實總經數據（含零售銷售 YoY）與 Yahoo Finance 資產價格，請稍候..."):
+        with st.spinner("正在透過 FRED API 同步官方真實總經數據（含 T5YIE 通膨預期與 WEI）及 Yahoo Finance 資產價格，請稍候..."):
             try:
                 fred = Fred(api_key=fred_api_key.strip())
                 
-                # 抓取官方月度序列：失業率、CPI、零售與餐飲銷售總額 (RSXFS)
+                # 抓取官方序列：失業率、T5YIE (5年期通膨平衡率)、WEI (週經濟指數)
                 unrate = fred.get_series('UNRATE')
-                cpi = fred.get_series('CPIAUCSL')
-                retail = fred.get_series('RSXFS') 
+                t5yie = fred.get_series('T5YIE') # 5-Year Breakeven Inflation Rate
+                wei = fred.get_series('WEI') # Weekly Economic Index
                 
                 unrate_df = pd.DataFrame({'Unemployment_Rate': unrate})
-                cpi_df = pd.DataFrame({'CPI': cpi})
-                retail_df = pd.DataFrame({'Retail_Sales': retail})
+                t5yie_df = pd.DataFrame({'Inflation_Expectation': t5yie})
+                wei_df = pd.DataFrame({'WEI': wei})
             except Exception as e:
                 st.error(f"❌ FRED API 連線或抓取失敗，請確認您的 API Key 是否正確。錯誤訊息: {e}")
                 st.stop()
@@ -105,13 +105,13 @@ if run_btn:
             # 對齊失業率
             macro_df["Unemployment_Rate"] = unrate_df.resample("ME").last()
             
-            # 計算精準的 CPI YoY (%)
-            cpi_monthly = cpi_df.resample("ME").last()
-            macro_df["CPI_YoY"] = cpi_monthly["CPI"].pct_change(12) * 100
+            # 對齊 5 年期通膨預期 (T5YIE 轉換為月底頻率)
+            t5yie_monthly = t5yie_df.resample("ME").last()
+            macro_df["Inflation_Expectation"] = t5yie_monthly["Inflation_Expectation"]
             
-            # 計算精準的零售銷售年增率 (Retail Sales YoY %)
-            retail_monthly = retail_df.resample("ME").last()
-            macro_df["Retail_Sales_YoY"] = retail_monthly["Retail_Sales"].pct_change(12) * 100
+            # 對齊 WEI 週經濟指數
+            wei_monthly = wei_df.resample("ME").last()
+            macro_df["WEI"] = wei_monthly["WEI"]
 
             # 跨資產過去 12 個月動能 (%)
             macro_df["SP500_Mom12M"] = df_m["^GSPC"].pct_change(12) * 100
@@ -122,11 +122,9 @@ if run_btn:
             macro_df["Target_Next_TYX"] = macro_df["TYX"].shift(-1)
             
             feature_cols = [
-                "Unemployment_Rate", "CPI_YoY", "Retail_Sales_YoY", 
+                "Unemployment_Rate", "Inflation_Expectation", "WEI", 
                 "SP500_Mom12M", "USD_Mom12M", "Gold_Mom12M"
             ]
-            
-            # 💡 關鍵修改：不強制 dropna，保留所有月份（讓抓不到數據的欄位顯示為空值以便排查）
 
             # 2. 機器學習與特徵歸因迴圈
             dates = macro_df.index.sort_values()
@@ -142,7 +140,6 @@ if run_btn:
                 test_row = macro_df.iloc[t]
                 target_forecast_date = test_date + pd.offsets.MonthEnd(1)
 
-                # 檢查當期特徵是否有缺失
                 feat_values = test_row[feature_cols].values
                 has_missing = pd.isna(feat_values).any()
 
@@ -150,7 +147,6 @@ if run_btn:
                 impacts = [np.nan] * len(feature_cols)
 
                 if not has_missing:
-                    # 若當期特徵完整，則進行訓練與預測
                     train_subset = macro_df.iloc[t - train_window : t].dropna(subset=feature_cols)
                     if len(train_subset) >= 12:
                         X_tr = train_subset[feature_cols]
@@ -222,13 +218,13 @@ if st.session_state.prediction_executed:
         else:
             col3.metric("最新預測殖利率", "N/A (數據收集中)")
 
-        # 1. 每月輸入參數與預測結果明細表（保留 9/30，未發布欄位留空）
+        # 1. 每月輸入參數與預測結果明細表
         st.markdown('<div class="section-header">📅 每月輸入參數與「下個月預測」結果明細表（含最新未發布列）</div>', unsafe_allow_html=True)
-        st.caption("說明：若 9/30 或最新月份的某些總經數據尚未被官方釋出，該欄位將會保持空白（NaN），方便您直接檢查哪些數據源有落後或收集問題。")
+        st.caption("說明：若最新月份的某些總經數據尚未被官方釋出，該欄位將會保持空白（NaN），方便您直接檢查哪些數據源有落後或收集問題。")
         
         show_input_df = results_df[[
             "Target_Date", "Actual", "Predicted", 
-            "Unemployment_Rate_Value", "CPI_YoY_Value", "Retail_Sales_YoY_Value",
+            "Unemployment_Rate_Value", "Inflation_Expectation_Value", "WEI_Value",
             "SP500_Mom12M_Value", "USD_Mom12M_Value", "Gold_Mom12M_Value"
         ]].copy()
         
@@ -237,7 +233,7 @@ if st.session_state.prediction_executed:
         
         show_input_df.columns = [
             "預測目標月份 (下個月)", "實際殖利率", "預測殖利率 (針對下個月)", 
-            "失業率(%)", "CPI YoY(%)", "零售銷售 YoY(%)",
+            "失業率(%)", "5年期通膨預期 (%)", "WEI 週經濟指數",
             "S&P500動能(%)", "美元動能(%)", "黃金動能(%)"
         ]
         st.dataframe(show_input_df.round(2), use_container_width=True)
