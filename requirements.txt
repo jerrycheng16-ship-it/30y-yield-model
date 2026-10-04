@@ -4,4 +4,4 @@ numpy
 yfinance
 requests
 scikit-learn
-pandas-datareader
+fredapi
