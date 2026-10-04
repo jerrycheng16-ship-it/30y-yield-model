@@ -13,7 +13,7 @@ from sklearn.linear_model import RidgeCV
 from fredapi import Fred
 
 # 網頁版面設定
-st.set_page_config(page_title="美國 30 年期公債殖利率動態預測 (LightGBM 驅動)", layout="wide")
+st.set_page_config(page_title="美國 30 年期公債殖利率多期預測系統 (TLT 策略回測)", layout="wide")
 
 st.markdown(
     """
@@ -42,43 +42,29 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率多期預測系統 (LightGBM + 總經與技術指標)</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率多期預測系統 (含 TLT 策略回測與績效分析)</div>', unsafe_allow_html=True)
 
 # -------------------------------------------------------------
 # 網頁上的預測邏輯與架構說明 Tag (Expander)
 # -------------------------------------------------------------
-with st.expander("📖 點此展開：核心預測邏輯與模型架構說明文件", expanded=False):
+with st.expander("📖 點此展開：核心預測邏輯與 TLT 回測策略說明文件", expanded=False):
     st.markdown("""
-    ### 🧠 30 年期公債殖利率預測模型說明文件
+    ### 🧠 30 年期公債殖利率預測模型與 TLT 策略說明文件
     
-    本系統採用非線性機器學習（**LightGBM** 樹狀模型）結合高頻總經、市場通膨預期、跨資產動能與債市技術指標，旨在解決傳統線性模型對債市轉折點反應遲鈍的問題。
+    本系統採用非線性機器學習（**LightGBM** 樹狀模型）結合高頻總經、市場通膨預期、跨資產動能與債市技術指標，預測未來跨度後的殖利率變動量。
     
-    #### 1. 核心預測目標（Target Definition）
-    * **改用變量預測（$\Delta \text{TYX}$）**：模型不直接預測殖利率的絕對數值，而是預測**未來特定跨度後的殖利率變動量**（例如：$TY_{t+k} - TY_t$）。這能有效過濾掉絕對水準的雜訊，專注於捕捉利率的升降方向。
-    * **支援預測天期選擇**：
-      * **1 個月期（Short-term View）**：捕捉短期月度總經發布與高頻動能衝擊。
-      * **3 個月期（Medium-term View）**：透過滾動窗格預測未來一季的長天期債市趨勢，提供中長期資產配置的 Macro View。
-      
-    #### 2. 特徵工程矩陣（Feature Engineering）
-    * **即時總經指標（無顯著發布時間差與嚴重回修）**：
-      * **失業率（`UNRATE`）**：衡量勞動市場熱度。
-      * **5 年期通膨預期（`T5YIE`）**：市場導向的 Breakeven Inflation Rate（每日更新，零落後）。
-      * **週經濟指數（`WEI`）**：紐約聯準會高頻週度實體經濟活動指標。
-    * **跨資產動能（Cross-Asset Momentum）**：
-      * **S&P 500 動能（`SP500_Mom12M`）**、**美元指數動能（`USD_Mom12M`）**、**黃金動能（`Gold_Mom12M`）**。
-    * **技術面與波動率特徵（Technical & Volatility）**：
-      * **10 日與 20 日 RSI**、**MACD 乖離率**（捕捉債市超買超賣與動能背離）。
-      * **MOVE 美債市場波動率指數（`^MOVE`，若無則以 VIX 備援）**：當美債波動率放大時，模型會動態調整特徵權重。
-
-    #### 3. 評估與勝率統計機制（Performance Metrics）
-    * **方向勝率（Directional Win Rate）**：檢驗模型預測的「升降方向」是否與實際發生一致。
-    * **預測期望值（Expectancy）**：綜合勝率與實際變動幅度，計算每次預測帶來的淨期望報酬率（$\text{Win Rate} \times \text{Avg Win} - \text{Loss Rate} \times \text{Avg Loss}$）。
+    #### 1. TLT 策略回測邏輯
+    * **交易標的**：`TLT`（20 年期以上美國公債 ETF）。因債券價格與殖利率呈反向連動，當模型預期利率下降時，即為買入 TLT 的訊號。
+    * **訊號對應**：
+      * **預測利率 < 當前基準實際利率**（預期降息/殖利率跌） $\rightarrow$ **做多 TLT（持有）**。
+      * **預測利率 $\ge$ 當前基準實際利率**（預期升息/殖利率漲） $\rightarrow$ **平倉 / 空手（持有現金）**。
+    * **績效指標**：計算淨值曲線、策略總報酬、年化報酬率與最大回落（Maximum Drawdown, MDD）。
     """)
 
 # -------------------------------------------------------------
 # 側邊欄參數與預測天期設定
 # -------------------------------------------------------------
-st.sidebar.header("⚙️ API 與回測參數設定")
+st.sidebar.header("⚙️️ API 與回測參數設定")
 
 default_fred_key = ""
 try:
@@ -97,7 +83,7 @@ train_window = st.sidebar.slider("訓練月數 (Train Window)", min_value=6, max
 target_start_date = st.sidebar.date_input("回測開始日期", pd.to_datetime("2020-01-31"))
 target_end_date = st.sidebar.date_input("回測結束日期", pd.to_datetime("2026-12-31"))
 
-run_btn = st.sidebar.button("🚀 開始執行預測與特徵解析")
+run_btn = st.sidebar.button("🚀 開始執行預測與 TLT 策略回測")
 
 if "prediction_executed" not in st.session_state:
     st.session_state.prediction_executed = False
@@ -106,7 +92,7 @@ if run_btn:
     if not fred_api_key:
         st.error("❌ 請先在側邊欄輸入 FRED API Key！")
     else:
-        with st.spinner(f"正在同步數據並建立「未來 {forecast_horizon} 個月」預測模型，請稍候..."):
+        with st.spinner(f"正在同步總經與 TLT 價格數據，並執行「未來 {forecast_horizon} 個月」預測與策略回測..."):
             try:
                 fred = Fred(api_key=fred_api_key.strip())
                 unrate = fred.get_series('UNRATE')
@@ -120,12 +106,12 @@ if run_btn:
                 st.error(f"❌ FRED API 連線失敗: {e}")
                 st.stop()
 
-            # 1. 下載資產價格
+            # 1. 下載資產價格 (加入 TLT)
             session = Session()
             session.headers.update({
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             })
-            tickers = ["^TYX", "^GSPC", "DX-Y.NYB", "GC=F", "^MOVE", "^VIX"]
+            tickers = ["^TYX", "^GSPC", "DX-Y.NYB", "GC=F", "^MOVE", "^VIX", "TLT"]
             fetch_start = pd.to_datetime("2010-01-01")
             fetch_end = pd.to_datetime("2028-12-31")
 
@@ -155,6 +141,7 @@ if run_btn:
 
             daily_df = pd.DataFrame(index=df_prices.index)
             daily_df["TYX"] = df_prices["^TYX"]
+            daily_df["TLT"] = df_prices["TLT"]
             daily_df["RSI_10"] = calculate_rsi(daily_df["TYX"], 10)
             daily_df["RSI_20"] = calculate_rsi(daily_df["TYX"], 20)
             daily_df["MACD_Diff"] = calculate_macd_diff(daily_df["TYX"])
@@ -165,6 +152,7 @@ if run_btn:
 
             macro_df = pd.DataFrame(index=df_m.index)
             macro_df["TYX"] = df_m["TYX"]
+            macro_df["TLT"] = df_m["TLT"]
             macro_df["RSI_10"] = df_m["RSI_10"]
             macro_df["RSI_20"] = df_m["RSI_20"]
             macro_df["MACD_Diff"] = df_m["MACD_Diff"]
@@ -239,6 +227,7 @@ if run_btn:
                     "Feature_Date": test_date,
                     "Target_Date": target_forecast_date,
                     "Current_TYX": test_row["Current_TYX"],
+                    "TLT_Price": test_row["TLT"],
                     "Actual": test_row["Future_TYX"],
                     "Predicted": predicted_tyx,
                     "Predicted_Delta": pred_delta,
@@ -271,7 +260,6 @@ if st.session_state.get("prediction_executed", False):
     if results_df is not None and not results_df.empty:
         st.markdown(f'<div class="section-header">📈 美國 30 年期公債殖利率：實際值 vs 預測值（未來 {horizon_val} 個月期）</div>', unsafe_allow_html=True)
         
-        # 💡 在圖表上方標示「最近一個月實際利率」與「最新預測利率」
         valid_pred_rows = results_df.dropna(subset=["Predicted"])
         if not valid_pred_rows.empty:
             latest_row = valid_pred_rows.iloc[-1]
@@ -293,7 +281,7 @@ if st.session_state.get("prediction_executed", False):
             chart_data.columns = [f"實際 30 年公債殖利率 (+{horizon_val}M)", f"機器學習預測值 (+{horizon_val}M)"]
             st.line_chart(chart_data)
 
-        # 3. 計算歷史已實現的勝率與期望值
+        # 3. 計算歷史勝率與期望值
         valid_eval = results_df.dropna(subset=["Actual", "Predicted", "Current_TYX"]).copy()
         if not valid_eval.empty:
             mse = np.mean((valid_eval["Actual"] - valid_eval["Predicted"]) ** 2)
@@ -325,13 +313,60 @@ if st.session_state.get("prediction_executed", False):
         col3.metric("平均絕對誤差 (MAE)", f"{mae:.3f}%")
         col4.metric("均方根誤差 (RMSE)", f"{rmse:.3f}%")
 
-        if not results_df["Predicted"].dropna().empty:
-            latest_pred_row = results_df["Predicted"].dropna().iloc[-1]
-            latest_target_date = results_df["Predicted"].dropna().index[-1] + pd.DateOffset(months=horizon_val)
-            st.info(f"💡 **最新即時預測**：以 `{results_df.dropna(subset=['Predicted']).index[-1].strftime('%Y-%m-%d')}` 為基準資料日，預測 **{latest_target_date.strftime('%Y-%m-%d')}** 的殖利率為 `🌿 {latest_pred_row:.2f}%`（模型：{'LightGBM' if HAS_LGB else 'RidgeCV'}）")
+        # -------------------------------------------------------------
+        # 🚀 TLT 策略回測引擎與績效呈現
+        # -------------------------------------------------------------
+        st.markdown('<div class="section-header">💰 TLT 策略回測淨值曲線與績效表現</div>', unsafe_allow_html=True)
+        
+        backtest_df = results_df.dropna(subset=["Predicted", "TLT_Price", "Current_TYX"]).copy()
+        if not backtest_df.empty:
+            # 訊號：預測利率 < 當前實際利率 -> 做多 TLT (1)，否則平倉現金 (0)
+            backtest_df["Signal"] = np.where(backtest_df["Predicted"] < backtest_df["Current_TYX"], 1, 0)
+            
+            # 計算 TLT 的單期報酬率 (Shift 1 期代表訊號生效後持有的報酬)
+            backtest_df["TLT_Return"] = backtest_df["TLT_Price"].pct_change()
+            backtest_df["Strategy_Return"] = backtest_df["Signal"].shift(1) * backtest_df["TLT_Return"]
+            backtest_df["Strategy_Return"] = backtest_df["Strategy_Return"].fillna(0)
 
-        # 1. 每月明細表（包含最新未揭曉的預測列）
-        st.markdown(f'<div class="section-header">📅 每月輸入參數與「未來 {horizon_val} 個月預測」明細表（含最新即時預測）</div>', unsafe_allow_html=True)
+            # 計算累積淨值曲線 (起始淨值 = 1.0)
+            backtest_df["Strategy_Nav"] = (1.0 + backtest_df["Strategy_Return"]).cumprod()
+            backtest_df["Benchmark_Nav"] = (1.0 + backtest_df["TLT_Return"].fillna(0)).cumprod()
+
+            # 計算績效指標
+            total_days = (backtest_df.index[-1] - backtest_df.index[0]).days
+            years = max(total_days / 365.25, 0.5)
+            
+            strat_total_return = backtest_df["Strategy_Nav"].iloc[-1] - 1.0
+            strat_cagr = (backtest_df["Strategy_Nav"].iloc[-1] ** (1 / years)) - 1.0
+            
+            bench_total_return = backtest_df["Benchmark_Nav"].iloc[-1] - 1.0
+            bench_cagr = (backtest_df["Benchmark_Nav"].iloc[-1] ** (1 / years)) - 1.0
+
+            # 最大回落 (Max Drawdown) 計算
+            strat_rolling_max = backtest_df["Strategy_Nav"].cummax()
+            strat_drawdown = (backtest_df["Strategy_Nav"] - strat_rolling_max) / strat_rolling_max
+            strat_mdd = strat_drawdown.min()
+
+            bench_rolling_max = backtest_df["Benchmark_Nav"].cummax()
+            bench_drawdown = (backtest_df["Benchmark_Nav"] - bench_rolling_max) / bench_rolling_max
+            bench_mdd = bench_drawdown.min()
+
+            # 顯示績效指標看板
+            pcol1, pcol2, pcol3, pcol4 = st.columns(4)
+            pcol1.metric("策略年化報酬率 (CAGR)", f"{strat_cagr * 100:.2f}%", f"基准: {bench_cagr * 100:.2f}%")
+            pcol2.metric("策略總報酬率", f"{strat_total_return * 100:.2f}%", f"基准: {bench_total_return * 100:.2f}%")
+            pcol3.metric("策略最大回落 (MDD)", f"{strat_mdd * 100:.2f}%", f"基准: {bench_mdd * 100:.2f}%")
+            pcol4.metric("回測期間", f"{years:.1f} 年", f"{len(backtest_df)} 個交易點")
+
+            # 畫出淨值曲線圖
+            nav_chart_df = backtest_df[["Strategy_Nav", "Benchmark_Nav"]].copy()
+            nav_chart_df.columns = ["模型訊號策略 (TLT + 現金)", "TLT 買入持有 (Benchmark)"]
+            st.line_chart(nav_chart_df)
+        else:
+            st.warning("⚠️ 目前回測期間資料不足，無法計算 TLT 策略績效。")
+
+        # 1. 每月明細表
+        st.markdown(f'<div class="section-header">📅 每月輸入參數與「未來 {horizon_val} 個月預測」明細表</div>', unsafe_allow_html=True)
         
         show_table_df = results_df[[
             "Target_Date", "Current_TYX", "Actual", "Predicted", 
@@ -362,7 +397,7 @@ if st.session_state.get("prediction_executed", False):
         ]
         st.dataframe(final_display_df.round(2), use_container_width=True)
 
-        # 2. 影響力分析 (已完美加入安全防護避免全空時報錯)
+        # 2. 影響力分析
         st.markdown(f'<div class="section-header">🔍 每月參數影響程度分析</div>', unsafe_allow_html=True)
         impact_df = results_df.set_index(results_df["Target_Date"].dt.strftime("%Y-%m-%d"))[[f"{col}_Impact" for col in feature_cols]].copy()
         impact_df.columns = feature_cols
