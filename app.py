@@ -274,6 +274,22 @@ if st.session_state.get("prediction_executed", False):
     if results_df is not None and not results_df.empty:
         st.markdown(f'<div class="section-header">📈 美國 30 年期公債殖利率：實際值 vs 預測值（未來 {horizon_val} 個月期）</div>', unsafe_allow_html=True)
         
+        # 💡 在圖表上方標示「最近一個月實際利率」與「最新預測利率」
+        valid_pred_rows = results_df.dropna(subset=["Predicted"])
+        if not valid_pred_rows.empty:
+            latest_row = valid_pred_rows.iloc[-1]
+            latest_feature_date = valid_pred_rows.index[-1].strftime('%Y-%m-%d')
+            latest_target_date = (valid_pred_rows.index[-1] + pd.DateOffset(months=horizon_val)).strftime('%Y-%m-%d')
+            
+            curr_rate = latest_row["Current_TYX"]
+            pred_rate = latest_row["Predicted"]
+            diff_rate = pred_rate - curr_rate
+
+            mcol1, mcol2, mcol3 = st.columns(3)
+            mcol1.metric("最近基準實際利率", f"{curr_rate:.2f}%", f"資料日: {latest_feature_date}")
+            mcol2.metric(f"最新預測利率 (+{horizon_val}M)", f"{pred_rate:.2f}%", f"{'+' if diff_rate >= 0 else ''}{diff_rate:.2f}% vs 當前")
+            mcol3.metric("預測目標結算日", latest_target_date, f"模型: {'LightGBM' if HAS_LGB else 'RidgeCV'}")
+
         valid_chart_df = results_df.dropna(subset=["Predicted", "Actual"])
         if not valid_chart_df.empty:
             chart_data = valid_chart_df.set_index("Target_Date")[["Actual", "Predicted"]]
@@ -350,7 +366,7 @@ if st.session_state.get("prediction_executed", False):
         st.dataframe(final_display_df.round(2), use_container_width=True)
 
         # 2. 影響力分析
-        st.markdown('<div class="section-header">🔍 每月參數影響程度分析</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="section-header">🔍 每月參數影響程度分析</div>', unsafe_allow_html=True)
         impact_df = results_df.set_index(results_df["Target_Date"].dt.strftime("%Y-%m-%d"))[[f"{col}_Impact" for col in feature_cols]].copy()
         impact_df.columns = feature_cols
         
