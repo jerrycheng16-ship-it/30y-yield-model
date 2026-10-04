@@ -45,21 +45,74 @@ st.markdown(
 st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率多期預測系統 (含 TLT/TBT 多空雙向策略回測)</div>', unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 網頁上的預測邏輯與架構說明 Tag (Expander)
+# 網頁上的預測邏輯與架構說明 Tag (Expander) —— 詳細升級版
 # -------------------------------------------------------------
-with st.expander("📖 點此展開：核心預測邏輯與 TLT/TBT 回測策略說明文件", expanded=False):
+with st.expander("📖 點此展開：核心預測邏輯與模型架構詳細說明文件", expanded=False):
     st.markdown("""
-    ### 🧠 30 年期公債殖利率預測模型與 TLT/TBT 策略說明文件
+    ### 🧠 美國 30 年期公債殖利率量化預測模型與策略白皮書
     
-    本系統採用非線性機器學習（**LightGBM** 樹狀模型）結合高頻總經、市場通膨預期、跨資產動能與債市技術指標，預測未來跨度後的殖利率變動量。
-    
-    #### 1. TLT / TBT 多空雙向策略回測邏輯
-    * **多空對應標的**：
-      * `TLT`（20 年期以上美國公債 ETF）：殖利率預期下降時買入（做多長債）。
-      * `TBT`（兩倍做空 20 年期以上公債 ETF）：殖利率預期上升時買入（做空長債）。
-    * **操作模式選擇**：
-      * **單向多頭模式（TLT + 現金）**：預期降息買 TLT，預期升息則平倉抱現金。
-      * **多空雙向模式（TLT + TBT 切換）**：預期降息買 TLT，預期升息轉買 TBT。
+    本系統旨在解決傳統總經模型對長天期美債（^TYX）轉折點反應遲鈍、雜訊過多的痛點。透過非線性機器學習（**LightGBM** 樹狀模型）、即時總經指標、跨資產動能、債市技術指標與動態滾動回測架構，提供高精準度的中短期方向預測與自動化對沖策略。
+
+    ---
+
+    #### 一、 核心預測目標與數學定義（Target Definition）
+    1. **變量預測（$\Delta \text{TYX}$）**：
+       * 模型不直接預測殖利率的絕對水準（Level），而是預測**未來 $k$ 個月後的殖利率變動量**：
+         $$\Delta \text{TYX}_{t+k} = \text{TYX}_{t+k} - \text{TYX}_t$$
+       * **設計理念**：絕對利率水準容易受到長期結構性通膨與貨幣政權轉移的影響，改用變量（$\Delta$）能有效過濾絕對水準雜訊，使模型專注於捕捉利率的升降方向。
+    2. **彈性預測天期（Forecast Horizon $k$）**：
+       * **$k = 1$ 個月期（Short-term View）**：捕捉短期月度總經數據發布與高頻市場資金衝擊。
+       * **$k = 3$ 個月期（Medium-term View）**：透過滾動窗格預測未來一季的長債趨勢，過濾單月雜訊，提供中長期資產配置的 Macro View。
+
+    ---
+
+    #### 二、 進階特徵工程矩陣（Feature Engineering Matrix）
+    模型在每一個基準月份 $t$，會提取以下三大類共 10 項高頻與總經特徵進行標準化（StandardScaler）：
+    1. **即時總經與實體經濟指標（Zero-lag Macro）**：
+       * **失業率（`UNRATE`）**：衡量勞動市場熱度與經濟過熱/衰退風險。
+       * **5 年期通膨預期（`T5YIE`）**：市場導向的 Breakeven Inflation Rate（每日更新，零落後）。
+       * **週經濟指數（`WEI`）**：紐約聯準會高頻週度實體經濟活動指標。
+    2. **跨資產動能與加速度（Cross-Asset Momentum）**：
+       * 涵蓋 **S&P 500（`^GSPC`）**、**美元指數（`DX-Y.NYB`）**、**黃金（`GC=F`）**。
+       * 計算其 **12 個月長期動能（Mom12M）**，捕捉跨資產資金的宏觀流向。
+    3. **債市技術面與波動率特徵（Technical & Volatility）**：
+       * **10 日與 20 日 RSI**：捕捉長債市場的超買與超賣狀態。
+       * **MACD 乖離率（Histogram）**：判定債市動能的背離與反轉點。
+       * **MOVE 美債市場波動率指數（`^MOVE`，若無則以 VIX 備援）**：當美債市場波動率放大時，樹狀模型會自動調整特徵權重，因應高波動政權。
+
+    ---
+
+    #### 三、 模型學習機制與訓練架構（Machine Learning Architecture）
+    1. **演算法核心**：優先採用 **LightGBM 樹狀迴歸模型**（若環境無此套件則自動備援至 RidgeCV）。樹狀模型能完美處理總經與技術指標之間的「條件式交織邏輯」（例如：當通膨預期高漲且 MOVE 波動率大增時，利率對總經數據的反應會與平時完全不同）。
+    2. **動態滾動訓練視窗（Rolling Train Window）**：
+       * 支援 **6 到 60 個月（預設 36 個月）** 的彈性訓練期。
+       * **設計理念**：避免將數年前早已過時的歷史規律（如舊經濟週期的參數）納入計算，讓模型對當前最新總經環境保持最高靈敏度。
+
+    ---
+
+    #### 四、 績效評估與勝率統計機制（Hit/Miss & Expectancy）
+    1. **方向正確性（Hit / Miss）定義**：
+       * **基準點（$t$）**：當期資料日的實際殖利率（`Current_TYX`）。
+       * **預測方向**：若預測殖利率 > `Current_TYX`，代表預期未來 $k$ 個月後利率會**走高（上升）**；反之預期**走低（下降）**。
+       * **實際方向**：以未來 $k$ 個月後的真實結算實際利率（$t+k$）與當期 `Current_TYX` 相比。
+       * **判定規則**：若模型預期的升降方向與實際結算方向相符，即判定為 **✅ 正確 (Hit)**；否則為 **❌ 錯誤 (Miss)**。
+    2. **預測期望值（Expectancy）**：
+       $$\text{Expectancy} = (\text{勝率} \times \text{平均獲利幅度}) - (\text{敗率} \times \text{平均虧損幅度})$$
+       用以衡量模型每次進行方向預測時所帶來的淨基點期望報酬。
+
+    ---
+
+    #### 五、 TLT / TBT 實戰策略回測引擎（Strategy Backtest）
+    模型產出的利率預測訊號可直接轉化為自動化 ETF 交易策略：
+    1. **TLT + 現金（單向多頭模式）**：
+       * **預測利率 < 當前實際利率**（預期降息/殖利率跌 $\rightarrow$ 債價漲） $\rightarrow$ **買入 TLT（持有）**。
+       * **預測利率 $\ge$ 當前實際利率**（預期升息/殖利率漲 $\rightarrow$ 債價跌） $\rightarrow$ **平倉（持有現金）**。
+    2. **TLT + TBT（多空雙向切換模式）**：
+       * **預測利率 < 當前實際利率** $\rightarrow$ **買入 TLT（做多長債）**。
+       * **預測利率 $\ge$ 當前實際利率** $\rightarrow$ **買入 TBT（兩倍做空長債）**。
+    3. **績效核心指標**：
+       * **年化報酬率（CAGR）**：評估策略長期複利增長能力。
+       * **最大回落（Maximum Drawdown, MDD）**：評估歷史最大資金回撤風險。
     """)
 
 # -------------------------------------------------------------
@@ -80,7 +133,6 @@ if not fred_api_key:
 
 forecast_horizon = st.sidebar.selectbox("選擇預測天期 (Horizon)", options=[1, 3], format_func=lambda x: f"預測未來 {x} 個月")
 
-# 策略模式選擇
 strategy_mode = st.sidebar.selectbox(
     "選擇債券策略模式", 
     options=["TLT + 現金 (單向多頭)", "TLT + TBT (多空雙向切換)"],
@@ -114,7 +166,7 @@ if run_btn:
                 st.error(f"❌ FRED API 連線失敗: {e}")
                 st.stop()
 
-            # 1. 下載資產價格 (加入 TLT 與 TBT)
+            # 1. 下載資產價格
             session = Session()
             session.headers.update({
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -327,7 +379,7 @@ if st.session_state.get("prediction_executed", False):
         col4.metric("均方根誤差 (RMSE)", f"{rmse:.3f}%")
 
         # -------------------------------------------------------------
-        # 🚀 債券策略回測引擎與績效呈現 (TLT vs TBT)
+        # 🚀 債券策略回測引擎與績效呈現
         # -------------------------------------------------------------
         st.markdown(f'<div class="section-header">💰 債券策略回測淨值曲線與績效表現 [{mode_val}]</div>', unsafe_allow_html=True)
         
@@ -337,14 +389,11 @@ if st.session_state.get("prediction_executed", False):
             tbt_ret = backtest_df["TBT_Price"].pct_change()
 
             if mode_val == "TLT + 現金 (單向多頭)":
-                # 預測利率 < 當前實際利率 -> 買入 TLT (1)，否則現金 (0)
                 backtest_df["Signal"] = np.where(backtest_df["Predicted"] < backtest_df["Current_TYX"], 1, 0)
                 backtest_df["Strategy_Return"] = backtest_df["Signal"].shift(1) * tlt_ret
                 benchmark_ret = tlt_ret
             else:
-                # 預測利率 < 當前實際利率 -> 買入 TLT (1)，預測利率 >= 當前實際利率 -> 買入 TBT (-1)
                 backtest_df["Signal"] = np.where(backtest_df["Predicted"] < backtest_df["Current_TYX"], 1, -1)
-                # 當訊號為 1 時賺 TLT 報酬，當訊號為 -1 時賺 TBT 報酬
                 strategy_ret = np.where(backtest_df["Signal"].shift(1) == 1, tlt_ret, tbt_ret)
                 backtest_df["Strategy_Return"] = strategy_ret
                 benchmark_ret = tlt_ret
