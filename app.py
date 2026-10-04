@@ -8,7 +8,7 @@ from sklearn.linear_model import RidgeCV
 from fredapi import Fred
 
 # 網頁版面設定
-st.set_page_config(page_title="美國 30 年期公債殖利率總經機器學習預測 (FRED API 驅動)", layout="wide")
+st.set_page_config(page_title="美國 30 年期公債殖利率總經機器學習預測 (ISM PMI 驅動)", layout="wide")
 
 st.markdown(
     """
@@ -37,8 +37,8 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率總經機器學習預測 (FRED API 驅動)</div>', unsafe_allow_html=True)
-st.markdown("### 【功能說明】透過聖路易聯準會官方 FRED API 抓取真實經濟數據（失業率、CPI YoY、實質 GDP YoY），結合跨資產動能進行機器學習預測與特徵歸因分析。")
+st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率總經機器學習預測 (ISM PMI 驅動)</div>', unsafe_allow_html=True)
+st.markdown("### 【功能說明】透過聖路易聯準會官方 FRED API 抓取真實月度總經數據（失業率、CPI YoY、ISM 製造業 PMI），結合跨資產動能進行機器學習預測與特徵歸因分析。")
 
 # -------------------------------------------------------------
 # 側邊欄參數與 FRED API Key 設定
@@ -69,18 +69,18 @@ if run_btn:
     if not fred_api_key:
         st.error("❌ 請先在側邊欄輸入 FRED API Key！")
     else:
-        with st.spinner("正在透過 FRED API 同步官方真實總經數據與 Yahoo Finance 資產價格，請稍候..."):
+        with st.spinner("正在透過 FRED API 同步官方真實總經數據（含 ISM PMI）與 Yahoo Finance 資產價格，請稍候..."):
             try:
                 fred = Fred(api_key=fred_api_key.strip())
                 
-                # 使用最穩定且官方支援的 FRED 序列代號
-                unrate = fred.get_series('UNRATE') # 失業率 (月)
-                cpi = fred.get_series('CPIAUCSL') # 消費者物價指數 (月)
-                gdp = fred.get_series('GDPC1') # 實質 GDP 絕對值 (季)，可用來精準計算 YoY
+                # 抓取官方月度序列：失業率、CPI、ISM 製造業指數 (NAPM)
+                unrate = fred.get_series('UNRATE')
+                cpi = fred.get_series('CPIAUCSL')
+                ism_pmi = fred.get_series('NAPM') # ISM Manufacturing PMI
                 
                 unrate_df = pd.DataFrame({'Unemployment_Rate': unrate})
                 cpi_df = pd.DataFrame({'CPI': cpi})
-                gdp_df = pd.DataFrame({'GDPC1': gdp})
+                ism_df = pd.DataFrame({'ISM_PMI': ism_pmi})
             except Exception as e:
                 st.error(f"❌ FRED API 連線或抓取失敗，請確認您的 API Key 是否正確。錯誤訊息: {e}")
                 st.stop()
@@ -109,9 +109,8 @@ if run_btn:
             cpi_monthly = cpi_df.resample("ME").last().ffill()
             macro_df["CPI_YoY"] = cpi_monthly["CPI"].pct_change(12) * 100
             
-            # 計算精準的實質 GDP YoY (%)（季資料轉為月並計算 4 季前的同期增幅）
-            gdp_monthly = gdp_df.resample("ME").last().ffill()
-            macro_df["Real_GDP_YoY"] = gdp_monthly["GDPC1"].pct_change(4) * 100
+            # 對齊 ISM 製造業 PMI（月頻率資料，完美與失業率、CPI 同步）
+            macro_df["ISM_PMI"] = ism_df.resample("ME").last().ffill()
 
             # 跨資產過去 12 個月動能 (%)
             macro_df["SP500_Mom12M"] = df_m["^GSPC"].pct_change(12) * 100
@@ -120,12 +119,13 @@ if run_btn:
 
             # 目標變數：未來一個月 30 年公債殖利率
             macro_df["Target_Next_TYX"] = macro_df["TYX"].shift(-1)
-            macro_df = macro_df.dropna()
-
+            
+            # 核心特徵清單（以 ISM_PMI 取代 GDP YoY）
             feature_cols = [
-                "Unemployment_Rate", "CPI_YoY", "Real_GDP_YoY", 
+                "Unemployment_Rate", "CPI_YoY", "ISM_PMI", 
                 "SP500_Mom12M", "USD_Mom12M", "Gold_Mom12M"
             ]
+            macro_df = macro_df.dropna(subset=feature_cols)
 
             # 2. 機器學習與特徵歸因迴圈
             dates = macro_df.index.sort_values()
@@ -136,13 +136,23 @@ if run_btn:
             if start_idx >= len(dates) - 1:
                 start_idx = max(12, len(dates) // 2)
 
-            for t in range(start_idx, len(dates) - 1):
+            for t in range(start_idx, len(dates)):
                 train_subset = macro_df.iloc[t - train_window : t]
                 test_row = macro_df.iloc[t]
                 test_date = dates[t]
 
+                if len(train_subset) < 12:
+                    continue
+
                 X_tr = train_subset[feature_cols]
-                y_tr = train_subset["Target_Next_TYX"]
+                y_tr = train_subset["Target_Next_TYX"].dropna()
+                
+                common_idx = X_tr.index.intersection(y_tr.index)
+                if len(common_idx) < 12:
+                    continue
+                X_tr = X_tr.loc[common_idx]
+                y_tr = y_tr.loc[common_idx]
+
                 X_te = test_row[feature_cols].values.reshape(1, -1)
 
                 scaler = StandardScaler()
@@ -191,9 +201,10 @@ if st.session_state.prediction_executed:
         chart_data.columns = ["實際 30 年公債殖利率 (^TYX)", "機器學習預測值"]
         st.line_chart(chart_data)
 
-        mse = np.mean((results_df["Actual"] - results_df["Predicted"]) ** 2)
+        valid_eval = results_df.dropna(subset=["Actual"])
+        mse = np.mean((valid_eval["Actual"] - valid_eval["Predicted"]) ** 2) if not valid_eval.empty else 0
         rmse = np.sqrt(mse)
-        mae = np.mean(np.abs(results_df["Actual"] - results_df["Predicted"]))
+        mae = np.mean(np.abs(valid_eval["Actual"] - valid_eval["Predicted"])) if not valid_eval.empty else 0
 
         st.markdown('<div class="section-header">📊 模型表現摘要</div>', unsafe_allow_html=True)
         col1, col2, col3 = st.columns(3)
@@ -205,12 +216,12 @@ if st.session_state.prediction_executed:
         st.markdown('<div class="section-header">📅 每月輸入參數與預測結果明細表</div>', unsafe_allow_html=True)
         show_input_df = results_df[[
             "Actual", "Predicted", 
-            "Unemployment_Rate_Value", "CPI_YoY_Value", "Real_GDP_YoY_Value",
+            "Unemployment_Rate_Value", "CPI_YoY_Value", "ISM_PMI_Value",
             "SP500_Mom12M_Value", "USD_Mom12M_Value", "Gold_Mom12M_Value"
         ]].copy()
         show_input_df.columns = [
             "實際殖利率", "預測殖利率", 
-            "失業率(%)", "CPI YoY(%)", "實質GDP YoY(%)",
+            "失業率(%)", "CPI YoY(%)", "ISM PMI",
             "S&P500動能(%)", "美元動能(%)", "黃金動能(%)"
         ]
         show_input_df.index = show_input_df.index.strftime("%Y-%m-%d")
