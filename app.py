@@ -73,10 +73,10 @@ if run_btn:
             try:
                 fred = Fred(api_key=fred_api_key.strip())
                 
-                # 抓取官方月度序列：失業率、CPI、ISM 製造業指數 (NAPM)
+                # 抓取官方月度序列：失業率、CPI、ISM 製造業指數 (使用正確的官方代號 ISM/MAN_PMI)
                 unrate = fred.get_series('UNRATE')
                 cpi = fred.get_series('CPIAUCSL')
-                ism_pmi = fred.get_series('NAPM') # ISM Manufacturing PMI
+                ism_pmi = fred.get_series('ISM/MAN_PMI') 
                 
                 unrate_df = pd.DataFrame({'Unemployment_Rate': unrate})
                 cpi_df = pd.DataFrame({'CPI': cpi})
@@ -109,7 +109,7 @@ if run_btn:
             cpi_monthly = cpi_df.resample("ME").last().ffill()
             macro_df["CPI_YoY"] = cpi_monthly["CPI"].pct_change(12) * 100
             
-            # 對齊 ISM 製造業 PMI（月頻率資料，完美與失業率、CPI 同步）
+            # 對齊 ISM 製造業 PMI
             macro_df["ISM_PMI"] = ism_df.resample("ME").last().ffill()
 
             # 跨資產過去 12 個月動能 (%)
@@ -120,7 +120,7 @@ if run_btn:
             # 目標變數：未來一個月 30 年公債殖利率
             macro_df["Target_Next_TYX"] = macro_df["TYX"].shift(-1)
             
-            # 核心特徵清單（以 ISM_PMI 取代 GDP YoY）
+            # 核心特徵清單
             feature_cols = [
                 "Unemployment_Rate", "CPI_YoY", "ISM_PMI", 
                 "SP500_Mom12M", "USD_Mom12M", "Gold_Mom12M"
