@@ -127,7 +127,7 @@ if run_btn:
             })
             tickers = ["^TYX", "^GSPC", "DX-Y.NYB", "GC=F", "^MOVE", "^VIX"]
             fetch_start = pd.to_datetime("2010-01-01")
-            fetch_end = pd.to_datetime("2028-12-31") # 確保抓取到最前端
+            fetch_end = pd.to_datetime("2028-12-31")
 
             df_raw = yf.download(tickers, start=fetch_start.strftime("%Y-%m-%d"), end=fetch_end.strftime("%Y-%m-%d"), progress=False, session=session)
             df_prices = df_raw["Adj Close"] if "Adj Close" in df_raw.columns else df_raw["Close"]
@@ -197,7 +197,6 @@ if run_btn:
             if start_idx >= len(dates) - forecast_horizon:
                 start_idx = max(12, len(dates) // 2)
 
-            # 💡 允許迴圈跑到最後一個可用特徵月份（包含最新未發布未來實際值的月份）
             for t in range(start_idx, len(dates)):
                 test_date = dates[t]
                 test_row = macro_df.iloc[t]
@@ -210,10 +209,8 @@ if run_btn:
                 impacts = [np.nan] * len(feature_cols)
 
                 if not has_missing:
-                    # 訓練集排除含有空目標值的歷史資料
                     train_subset = macro_df.iloc[:t].dropna(subset=feature_cols + ["Target_Delta_TYX"])
                     if len(train_subset) >= 12:
-                        # 取最近的 train_window 筆資料進行訓練
                         if len(train_subset) > train_window:
                             train_subset = train_subset.iloc[-train_window:]
 
@@ -365,7 +362,7 @@ if st.session_state.get("prediction_executed", False):
         ]
         st.dataframe(final_display_df.round(2), use_container_width=True)
 
-        # 2. 影響力分析
+        # 2. 影響力分析 (已加入安全防護避免全空時報錯)
         st.markdown(f'<div class="section-header">🔍 每月參數影響程度分析</div>', unsafe_allow_html=True)
         impact_df = results_df.set_index(results_df["Target_Date"].dt.strftime("%Y-%m-%d"))[[f"{col}_Impact" for col in feature_cols]].copy()
         impact_df.columns = feature_cols
