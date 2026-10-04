@@ -9,7 +9,6 @@ from sklearn.linear_model import RidgeCV
 # 網頁版面設定
 st.set_page_config(page_title="美國 30 年期公債殖利率總經機器學習預測與特徵影響力分析", layout="wide")
 
-# 🎨 自訂 CSS
 st.markdown(
     """
     <style>
@@ -40,9 +39,6 @@ st.markdown(
 st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率總經機器學習預測與特徵影響力分析</div>', unsafe_allow_html=True)
 st.markdown("### 【功能說明】結合美國真實總經指標與跨資產動能，利用 Ridge Regression 預測未來 30 年期公債殖利率（^TYX），並動態解析每個月各參數的數值與影響程度。")
 
-# -------------------------------------------------------------
-# 側邊欄參數設定
-# -------------------------------------------------------------
 st.sidebar.header("⚙️ 模型與回測參數設定")
 train_window = st.sidebar.slider("訓練月數 (Train Window)", min_value=24, max_value=120, value=60, step=12)
 target_start_date = st.sidebar.date_input("回測開始日期", pd.to_datetime("2020-01-31"))
@@ -68,38 +64,37 @@ if run_btn:
         df_raw = yf.download(tickers, start=fetch_start.strftime("%Y-%m-%d"), end=fetch_end.strftime("%Y-%m-%d"), progress=False, session=session)
         df_prices = df_raw["Adj Close"] if "Adj Close" in df_raw.columns else df_raw["Close"]
 
-        # 2. 精準抓取並處理 FRED 總經數據
+        # 2. 安全抓取並清理 FRED 總經數據
         try:
             import pandas_datareader.data as web
-            # UNRATE: 失業率 (月)
             unrate = web.DataReader("UNRATE", "fred", fetch_start, fetch_end)
-            # CPIAUCSL: 消費者物價指數 (月) -> 用來算 YoY
             cpi = web.DataReader("CPIAUCSL", "fred", fetch_start, fetch_end)
-            # A191RL1Q252SBEA: 實質 GDP 季增年率 (季)
             gdp = web.DataReader("A191RL1Q252SBEA", "fred", fetch_start, fetch_end)
         except Exception:
-            # 備用模擬以防網路受限
             idx_m = df_prices.resample("ME").last().index
             unrate = pd.DataFrame({"UNRATE": np.random.uniform(3.5, 5.0, len(idx_m))}, index=idx_m)
             cpi = pd.DataFrame({"CPIAUCSL": np.linspace(250, 310, len(idx_m))}, index=idx_m)
             gdp = pd.DataFrame({"A191RL1Q252SBEA": np.random.uniform(1.5, 3.0, len(idx_m))}, index=idx_m)
 
-        # 統一轉換為月底頻率 (Month End)
+        # 確保總經數據皆轉為乾淨的數值型態
+        unrate = unrate.apply(pd.to_numeric, errors='coerce')
+        cpi = cpi.apply(pd.to_numeric, errors='coerce')
+        gdp = gdp.apply(pd.to_numeric, errors='coerce')
+
         df_m = df_prices.resample("ME").last().ffill()
         
         macro_df = pd.DataFrame(index=df_m.index)
         macro_df["TYX"] = df_m["^TYX"]
         
-        # 處理失業率
-        macro_df["Unemployment_Rate"] = unrate.resample("ME").last().ffill()
+        # 對齊到月底頻率並前向填滿
+        macro_df["Unemployment_Rate"] = unrate.resample("ME").last().ffill().iloc[:, 0]
         
-        # 處理 CPI YoY (%)：確保對應正確的 12 個月前數值
-        cpi_monthly = cpi.resample("ME").last().ffill()
-        macro_df["CPI_YoY"] = cpi_monthly.iloc[:, 0].pct_change(12) * 100
+        # 修正 CPI YoY 計算方式：使用指數的 12 個月百分比變化
+        cpi_series = cpi.resample("ME").last().ffill().iloc[:, 0]
+        macro_df["CPI_YoY"] = cpi_series.pct_change(12) * 100
         
-        # 處理實質 GDP YoY（季資料前向填滿至月資料）
-        gdp_monthly = gdp.resample("ME").last().ffill()
-        macro_df["Real_GDP_YoY"] = gdp_monthly.iloc[:, 0]
+        # 實質 GDP YoY
+        macro_df["Real_GDP_YoY"] = gdp.resample("ME").last().ffill().iloc[:, 0]
 
         # 跨資產過去 12 個月動能 (%)
         macro_df["SP500_Mom12M"] = df_m["^GSPC"].pct_change(12) * 100
@@ -143,7 +138,6 @@ if run_btn:
             pred = model.predict(X_te_scaled)[0]
             actual = test_row["Target_Next_TYX"]
 
-            # 計算每個特徵當期的「貢獻度」
             coefs = model.coef_
             contributions = X_te_scaled[0] * coefs
             
