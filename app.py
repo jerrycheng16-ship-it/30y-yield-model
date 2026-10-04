@@ -54,7 +54,7 @@ except Exception:
 
 fred_api_key = st.sidebar.text_input("FRED API Key (必填)", type="password", value=default_fred_key)
 if not fred_api_key:
-    st.sidebar.warning("⚠️ 請先輸入您的 FRED API Key 方可正確載入真實總經數據。(可至 st.stlouisfed.org 免費申請)")
+    st.sidebar.warning("⚠️ 請先輸入您的 FRED API Key 方可正確載入真實總經數據。")
 
 train_window = st.sidebar.slider("訓練月數 (Train Window)", min_value=24, max_value=120, value=60, step=12)
 target_start_date = st.sidebar.date_input("回測開始日期", pd.to_datetime("2020-01-31"))
@@ -73,15 +73,14 @@ if run_btn:
             try:
                 fred = Fred(api_key=fred_api_key.strip())
                 
-                # 透過官方 API 精準抓取序列
-                unrate = fred.get_series('UNRATE') # 失業率
-                cpi = fred.get_series('CPIAUCSL') # CPI 指數
-                gdp = fred.get_series('A191RL1Q252SBEA') # 實質GDP季增年率
+                # 使用最穩定且官方支援的 FRED 序列代號
+                unrate = fred.get_series('UNRATE') # 失業率 (月)
+                cpi = fred.get_series('CPIAUCSL') # 消費者物價指數 (月)
+                gdp = fred.get_series('GDPC1') # 實質 GDP 絕對值 (季)，可用來精準計算 YoY
                 
-                # 轉為 DataFrame
                 unrate_df = pd.DataFrame({'Unemployment_Rate': unrate})
                 cpi_df = pd.DataFrame({'CPI': cpi})
-                gdp_df = pd.DataFrame({'GDP_YoY': gdp})
+                gdp_df = pd.DataFrame({'GDPC1': gdp})
             except Exception as e:
                 st.error(f"❌ FRED API 連線或抓取失敗，請確認您的 API Key 是否正確。錯誤訊息: {e}")
                 st.stop()
@@ -103,15 +102,16 @@ if run_btn:
             macro_df = pd.DataFrame(index=df_m.index)
             macro_df["TYX"] = df_m["^TYX"]
             
-            # 對齊並重取樣至月底頻率
+            # 對齊失業率
             macro_df["Unemployment_Rate"] = unrate_df.resample("ME").last().ffill()
             
             # 計算精準的 CPI YoY (%)
             cpi_monthly = cpi_df.resample("ME").last().ffill()
             macro_df["CPI_YoY"] = cpi_monthly["CPI"].pct_change(12) * 100
             
-            # 實質 GDP YoY
-            macro_df["Real_GDP_YoY"] = gdp_df.resample("ME").last().ffill()
+            # 計算精準的實質 GDP YoY (%)（季資料轉為月並計算 4 季前的同期增幅）
+            gdp_monthly = gdp_df.resample("ME").last().ffill()
+            macro_df["Real_GDP_YoY"] = gdp_monthly["GDPC1"].pct_change(4) * 100
 
             # 跨資產過去 12 個月動能 (%)
             macro_df["SP500_Mom12M"] = df_m["^GSPC"].pct_change(12) * 100
