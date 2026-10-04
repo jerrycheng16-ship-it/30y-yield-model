@@ -91,7 +91,6 @@ fred_api_key = st.sidebar.text_input("FRED API Key (必填)", type="password", v
 if not fred_api_key:
     st.sidebar.warning("⚠️ 請先輸入您的 FRED API Key 方可正確載入真實總經數據。")
 
-# 新增預測天期選擇
 forecast_horizon = st.sidebar.selectbox("選擇預測天期 (Horizon)", options=[1, 3], format_func=lambda x: f"預測未來 {x} 個月")
 
 train_window = st.sidebar.slider("訓練月數 (Train Window)", min_value=24, max_value=120, value=60, step=12)
@@ -128,7 +127,7 @@ if run_btn:
             })
             tickers = ["^TYX", "^GSPC", "DX-Y.NYB", "GC=F", "^MOVE", "^VIX"]
             fetch_start = pd.to_datetime("2010-01-01")
-            fetch_end = pd.to_datetime(target_end_date) + pd.Timedelta(days=15)
+            fetch_end = pd.to_datetime("2028-12-31") # 確保抓取到最前端
 
             df_raw = yf.download(tickers, start=fetch_start.strftime("%Y-%m-%d"), end=fetch_end.strftime("%Y-%m-%d"), progress=False, session=session)
             df_prices = df_raw["Adj Close"] if "Adj Close" in df_raw.columns else df_raw["Close"]
@@ -140,7 +139,6 @@ if run_btn:
             else:
                 move_series = pd.Series(20.0, index=df_prices.index)
 
-            # 技術指標計算輔助函數
             def calculate_rsi(series, period=14):
                 delta = series.diff()
                 gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -182,7 +180,6 @@ if run_btn:
             macro_df["USD_Mom12M"] = prices_m["DX-Y.NYB"].pct_change(12) * 100
             macro_df["Gold_Mom12M"] = prices_m["GC=F"].pct_change(12) * 100
 
-            # 🎯 依據選擇的天期調整目標變數（1 個月或 3 個月變動量）
             macro_df["Current_TYX"] = macro_df["TYX"]
             macro_df["Future_TYX"] = macro_df["TYX"].shift(-forecast_horizon)
             macro_df["Target_Delta_TYX"] = macro_df["Future_TYX"] - macro_df["Current_TYX"]
@@ -200,7 +197,8 @@ if run_btn:
             if start_idx >= len(dates) - forecast_horizon:
                 start_idx = max(12, len(dates) // 2)
 
-            for t in range(start_idx, len(dates) - forecast_horizon + 1):
+            # 💡 允許迴圈跑到最後一個可用特徵月份（包含最新未發布未來實際值的月份）
+            for t in range(start_idx, len(dates)):
                 test_date = dates[t]
                 test_row = macro_df.iloc[t]
                 target_forecast_date = test_date + pd.offsets.MonthEnd(forecast_horizon)
@@ -212,8 +210,13 @@ if run_btn:
                 impacts = [np.nan] * len(feature_cols)
 
                 if not has_missing:
-                    train_subset = macro_df.iloc[t - train_window : t].dropna(subset=feature_cols + ["Target_Delta_TYX"])
+                    # 訓練集排除含有空目標值的歷史資料
+                    train_subset = macro_df.iloc[:t].dropna(subset=feature_cols + ["Target_Delta_TYX"])
                     if len(train_subset) >= 12:
+                        # 取最近的 train_window 筆資料進行訓練
+                        if len(train_subset) > train_window:
+                            train_subset = train_subset.iloc[-train_window:]
+
                         X_tr = train_subset[feature_cols]
                         y_tr = train_subset["Target_Delta_TYX"]
                         X_te = test_row[feature_cols].values.reshape(1, -1)
@@ -253,7 +256,7 @@ if run_btn:
             if not results_df.empty:
                 results_df["Feature_Date"] = pd.to_datetime(results_df["Feature_Date"])
                 results_df = results_df.set_index("Feature_Date")
-                results_df = results_df.loc[pd.to_datetime(target_start_date):pd.to_datetime(target_end_date)]
+                results_df = results_df.loc[pd.to_datetime(target_start_date):pd.to_datetime(target_end_date) + pd.DateOffset(months=forecast_horizon)]
 
             if results_df.empty:
                 st.error("在您設定的回測期間內沒有足夠的資料，請將回測開始日期調早！")
@@ -271,13 +274,13 @@ if st.session_state.get("prediction_executed", False):
     if results_df is not None and not results_df.empty:
         st.markdown(f'<div class="section-header">📈 美國 30 年期公債殖利率：實際值 vs 預測值（未來 {horizon_val} 個月期）</div>', unsafe_allow_html=True)
         
-        valid_chart_df = results_df.dropna(subset=["Predicted"])
+        valid_chart_df = results_df.dropna(subset=["Predicted", "Actual"])
         if not valid_chart_df.empty:
             chart_data = valid_chart_df.set_index("Target_Date")[["Actual", "Predicted"]]
             chart_data.columns = [f"實際 30 年公債殖利率 (+{horizon_val}M)", f"機器學習預測值 (+{horizon_val}M)"]
             st.line_chart(chart_data)
 
-        # 3. 計算勝率與期望值
+        # 3. 計算歷史已實現的勝率與期望值
         valid_eval = results_df.dropna(subset=["Actual", "Predicted", "Current_TYX"]).copy()
         if not valid_eval.empty:
             mse = np.mean((valid_eval["Actual"] - valid_eval["Predicted"]) ** 2)
@@ -310,10 +313,12 @@ if st.session_state.get("prediction_executed", False):
         col4.metric("均方根誤差 (RMSE)", f"{rmse:.3f}%")
 
         if not results_df["Predicted"].dropna().empty:
-            st.info(f"💡 **最新預測殖利率 (+{horizon_val}M)**：`{results_df['Predicted'].dropna().iloc[-1]:.2f}%`（模型架構：{'LightGBM' if HAS_LGB else 'RidgeCV'}）")
+            latest_pred_row = results_df["Predicted"].dropna().iloc[-1]
+            latest_target_date = results_df["Predicted"].dropna().index[-1] + pd.DateOffset(months=horizon_val)
+            st.info(f"💡 **最新即時預測**：以 `{results_df.dropna(subset=['Predicted']).index[-1].strftime('%Y-%m-%d')}` 為基準資料日，預測 **{latest_target_date.strftime('%Y-%m-%d')}** 的殖利率為 `🌿 {latest_pred_row:.2f}%`（模型：{'LightGBM' if HAS_LGB else 'RidgeCV'}）")
 
-        # 1. 每月明細表
-        st.markdown(f'<div class="section-header">📅 每月輸入參數與「未來 {horizon_val} 個月預測」明細表</div>', unsafe_allow_html=True)
+        # 1. 每月明細表（包含最新未揭曉的預測列）
+        st.markdown(f'<div class="section-header">📅 每月輸入參數與「未來 {horizon_val} 個月預測」明細表（含最新即時預測）</div>', unsafe_allow_html=True)
         
         show_table_df = results_df[[
             "Target_Date", "Current_TYX", "Actual", "Predicted", 
@@ -325,7 +330,7 @@ if st.session_state.get("prediction_executed", False):
         show_table_df["Actual_Dir"] = show_table_df["Actual"] > show_table_df["Current_TYX"]
         show_table_df["方向勝率判斷"] = np.where(
             show_table_df["Actual"].isna() | show_table_df["Predicted"].isna(),
-            "資料收集中 / 待揭曉",
+            "⏳ 最新即時預測 (待揭曉)",
             np.where(show_table_df["Pred_Dir"] == show_table_df["Actual_Dir"], "✅ 正確 (Hit)", "❌ 錯誤 (Miss)")
         )
         
