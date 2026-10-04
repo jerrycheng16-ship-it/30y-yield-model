@@ -38,7 +38,7 @@ st.markdown(
 )
 
 st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率總經機器學習預測 (通膨預期驅動)</div>', unsafe_allow_html=True)
-st.markdown("### 【功能說明】透過聖路易聯準會官方 FRED API 抓取真實總經數據（失業率、T5YIE 市場通膨預期、WEI 週經濟指數），結合跨資產動能，預測「下個月末」的 30 年期公債殖利率走勢與特徵歸因分析。")
+st.markdown("### 【功能說明】透過聖路易聯準會官方 FRED API 抓取真實總經數據（失業率、T5YIE 市場通膨預期、WEI 週經濟指數），結合跨資產動能，預測「下個月末」的 30 年期公債殖利率走勢、特徵歸因分析與方向勝率統計。")
 
 # -------------------------------------------------------------
 # 側邊欄參數與 FRED API Key 設定
@@ -75,8 +75,8 @@ if run_btn:
                 
                 # 抓取官方序列：失業率、T5YIE (5年期通膨平衡率)、WEI (週經濟指數)
                 unrate = fred.get_series('UNRATE')
-                t5yie = fred.get_series('T5YIE') # 5-Year Breakeven Inflation Rate
-                wei = fred.get_series('WEI') # Weekly Economic Index
+                t5yie = fred.get_series('T5YIE')
+                wei = fred.get_series('WEI')
                 
                 unrate_df = pd.DataFrame({'Unemployment_Rate': unrate})
                 t5yie_df = pd.DataFrame({'Inflation_Expectation': t5yie})
@@ -105,7 +105,7 @@ if run_btn:
             # 對齊失業率
             macro_df["Unemployment_Rate"] = unrate_df.resample("ME").last()
             
-            # 對齊 5 年期通膨預期 (T5YIE 轉換為月底頻率)
+            # 對齊 5 年期通膨預期
             t5yie_monthly = t5yie_df.resample("ME").last()
             macro_df["Inflation_Expectation"] = t5yie_monthly["Inflation_Expectation"]
             
@@ -118,7 +118,8 @@ if run_btn:
             macro_df["USD_Mom12M"] = df_m["DX-Y.NYB"].pct_change(12) * 100
             macro_df["Gold_Mom12M"] = df_m["GC=F"].pct_change(12) * 100
 
-            # 目標變數：未來一個月 30 年公債殖利率
+            # 當前實際殖利率與目標變數（未來一個月）
+            macro_df["Current_TYX"] = macro_df["TYX"]
             macro_df["Target_Next_TYX"] = macro_df["TYX"].shift(-1)
             
             feature_cols = [
@@ -170,6 +171,7 @@ if run_btn:
                 record = {
                     "Feature_Date": test_date,
                     "Target_Date": target_forecast_date,
+                    "Current_TYX": test_row["Current_TYX"],
                     "Actual": test_row["Target_Next_TYX"],
                     "Predicted": pred,
                 }
@@ -204,39 +206,70 @@ if st.session_state.prediction_executed:
         chart_data.columns = ["實際 30 年公債殖利率 (^TYX)", "機器學習預測值"]
         st.line_chart(chart_data)
 
-        valid_eval = results_df.dropna(subset=["Actual", "Predicted"])
-        mse = np.mean((valid_eval["Actual"] - valid_eval["Predicted"]) ** 2) if not valid_eval.empty else 0
-        rmse = np.sqrt(mse)
-        mae = np.mean(np.abs(valid_eval["Actual"] - valid_eval["Predicted"])) if not valid_eval.empty else 0
+        # 3. 計算誤差與方向勝率
+        valid_eval = results_df.dropna(subset=["Actual", "Predicted", "Current_TYX"]).copy()
+        if not valid_eval.empty:
+            mse = np.mean((valid_eval["Actual"] - valid_eval["Predicted"]) ** 2)
+            rmse = np.sqrt(mse)
+            mae = np.mean(np.abs(valid_eval["Actual"] - valid_eval["Predicted"]))
 
-        st.markdown('<div class="section-header">📊 模型表現摘要</div>', unsafe_allow_html=True)
-        col1, col2, col3 = st.columns(3)
-        col1.metric("平均絕對誤差 (MAE)", f"{mae:.3f}%")
-        col2.metric("均方根誤差 (RMSE)", f"{rmse:.3f}%")
-        if not results_df["Predicted"].dropna().empty:
-            col3.metric("最新預測殖利率", f"{results_df['Predicted'].dropna().iloc[-1]:.2f}%")
+            # 方向預測邏輯計算
+            # 預期方向：Predicted vs Current_TYX (預期升或降)
+            # 實際方向：Actual vs Current_TYX (實際升或降)
+            valid_eval["Pred_Direction"] = np.where(valid_eval["Predicted"] > valid_eval["Current_TYX"], 1, -1)
+            valid_eval["Actual_Direction"] = np.where(valid_eval["Actual"] > valid_eval["Current_TYX"], 1, -1)
+            valid_eval["Is_Correct"] = valid_eval["Pred_Direction"] == valid_eval["Actual_Direction"]
+
+            win_rate = valid_eval["Is_Correct"].mean() * 100
+            total_trades = len(valid_eval)
+            correct_trades = valid_eval["Is_Correct"].sum()
         else:
-            col3.metric("最新預測殖利率", "N/A (數據收集中)")
+            rmse, mae, win_rate, total_trades, correct_trades = 0, 0, 0, 0, 0
 
-        # 1. 每月輸入參數與預測結果明細表
-        st.markdown('<div class="section-header">📅 每月輸入參數與「下個月預測」結果明細表（含最新未發布列）</div>', unsafe_allow_html=True)
-        st.caption("說明：若最新月份的某些總經數據尚未被官方釋出，該欄位將會保持空白（NaN），方便您直接檢查哪些數據源有落後或收集問題。")
+        st.markdown('<div class="section-header">📊 模型表現與方向勝率摘要</div>', unsafe_allow_html=True)
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("方向預測勝率 (Win Rate)", f"{win_rate:.1f}%", f"{correct_trades}/{total_trades} 次正確")
+        col2.metric("平均絕對誤差 (MAE)", f"{mae:.3f}%")
+        col3.metric("均方根誤差 (RMSE)", f"{rmse:.3f}%")
+        if not results_df["Predicted"].dropna().empty:
+            col4.metric("最新預測殖利率", f"{results_df['Predicted'].dropna().iloc[-1]:.2f}%")
+        else:
+            col4.metric("最新預測殖利率", "N/A (數據收集中)")
+
+        # 1. 每月輸入參數與預測結果明細表（含勝率判斷）
+        st.markdown('<div class="section-header">📅 每月輸入參數與「下個月預測」明細表（含方向勝率判斷）</div>', unsafe_allow_html=True)
+        st.caption("說明：【預測方向】為預測值與當月實際值的比較；【實際方向】為下月實際值與當月實際值的比較。兩者相符即為預測正確（Hit）。")
         
-        show_input_df = results_df[[
-            "Target_Date", "Actual", "Predicted", 
+        show_table_df = results_df[[
+            "Target_Date", "Current_TYX", "Actual", "Predicted", 
             "Unemployment_Rate_Value", "Inflation_Expectation_Value", "WEI_Value",
             "SP500_Mom12M_Value", "USD_Mom12M_Value", "Gold_Mom12M_Value"
         ]].copy()
+
+        # 計算表格中的單月勝率標記
+        show_table_df["Pred_Dir"] = show_table_df["Predicted"] > show_table_df["Current_TYX"]
+        show_table_df["Actual_Dir"] = show_table_df["Actual"] > show_table_df["Current_TYX"]
+        show_table_df["方向勝率判斷"] = np.where(
+            show_table_df["Actual"].isna() | show_table_df["Predicted"].isna(),
+            "資料收集中 / 待揭曉",
+            np.where(show_table_df["Pred_Dir"] == show_table_df["Actual_Dir"], "✅ 正確 (Hit)", "❌ 錯誤 (Miss)")
+        )
         
-        show_input_df["Target_Date"] = pd.to_datetime(show_input_df["Target_Date"]).dt.strftime("%Y-%m-%d")
-        show_input_df.index = show_input_df.index.strftime("%Y-%m-%d")
+        show_table_df["Target_Date"] = pd.to_datetime(show_table_df["Target_Date"]).dt.strftime("%Y-%m-%d")
+        show_table_df.index = show_table_df.index.strftime("%Y-%m-%d")
         
-        show_input_df.columns = [
-            "預測目標月份 (下個月)", "實際殖利率", "預測殖利率 (針對下個月)", 
+        final_display_df = show_table_df[[
+            "Target_Date", "Current_TYX", "Actual", "Predicted", "方向勝率判斷",
+            "Unemployment_Rate_Value", "Inflation_Expectation_Value", "WEI_Value",
+            "SP500_Mom12M_Value", "USD_Mom12M_Value", "Gold_Mom12M_Value"
+        ]].copy()
+
+        final_display_df.columns = [
+            "預測目標月份 (下個月)", "當月基準實際利率", "下月實際利率", "預測殖利率", "方向預測結果",
             "失業率(%)", "5年期通膨預期 (%)", "WEI 週經濟指數",
             "S&P500動能(%)", "美元動能(%)", "黃金動能(%)"
         ]
-        st.dataframe(show_input_df.round(2), use_container_width=True)
+        st.dataframe(final_display_df.round(2), use_container_width=True)
 
         # 2. 每個月哪一個參數影響程度最大
         st.markdown('<div class="section-header">🔍 每月參數影響程度分析（正向拉升 / 負向壓抑）</div>', unsafe_allow_html=True)
