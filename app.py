@@ -45,7 +45,7 @@ st.markdown(
 st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率進階量化預測系統 (曲線斜率 + 信用利差 + 動能加速度)</div>', unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 網頁上的預測邏輯與架構說明 Tag (Expander) —— 已更新勝率定義
+# 網頁上的預測邏輯與架構說明 Tag (Expander)
 # -------------------------------------------------------------
 with st.expander("📖 點此展開：核心預測邏輯與模型架構說明文件", expanded=False):
     st.markdown("""
@@ -81,7 +81,7 @@ with st.expander("📖 點此展開：核心預測邏輯與模型架構說明文
     """)
 
 # -------------------------------------------------------------
-# 側邊欄參數與設定
+# 側邊欄參數與設定（訓練月數調整為 6 ~ 60）
 # -------------------------------------------------------------
 st.sidebar.header("⚙️ API 與回測參數設定")
 
@@ -97,7 +97,9 @@ if not fred_api_key:
     st.sidebar.warning("⚠️ 請先輸入您的 FRED API Key 方可正確載入真實總經數據。")
 
 forecast_horizon = st.sidebar.selectbox("選擇預測天期 (Horizon)", options=[1, 3], format_func=lambda x: f"預測未來 {x} 個月")
-train_window = st.sidebar.slider("訓練月數 (Train Window)", min_value=24, max_value=120, value=60, step=12)
+
+# 🎯 調整訓練月數滑桿範圍為 6 ~ 60，預設值 24
+train_window = st.sidebar.slider("訓練月數 (Train Window)", min_value=6, max_value=60, value=24, step=6)
 
 min_bp_filter = st.sidebar.slider("盤整雜訊過濾門檻 (bps)", min_value=0, max_value=10, value=1, step=1, help="過濾掉實際變動小於此基點的微幅震盪月份，提升勝率評估精準度。")
 
@@ -210,9 +212,11 @@ if run_btn:
             dates = macro_df.index.sort_values()
             detailed_records = []
 
+            # 配合較短的訓練窗口，將起始點門檻動態調整（至少需 6 個月資料）
+            min_train_req = min(train_window, 12)
             start_idx = train_window
             if start_idx >= len(dates) - forecast_horizon:
-                start_idx = max(12, len(dates) // 2)
+                start_idx = max(min_train_req, len(dates) // 2)
 
             for t in range(start_idx, len(dates)):
                 test_date = dates[t]
@@ -227,7 +231,7 @@ if run_btn:
 
                 if not has_missing:
                     train_subset = macro_df.iloc[:t].dropna(subset=feature_cols + ["Target_Delta_TYX"])
-                    if len(train_subset) >= 12:
+                    if len(train_subset) >= min_train_req:
                         if len(train_subset) > train_window:
                             train_subset = train_subset.iloc[-train_window:]
 
