@@ -362,14 +362,21 @@ if st.session_state.get("prediction_executed", False):
         ]
         st.dataframe(final_display_df.round(2), use_container_width=True)
 
-        # 2. 影響力分析 (已加入安全防護避免全空時報錯)
+        # 2. 影響力分析 (已完美加入安全防護避免全空時報錯)
         st.markdown(f'<div class="section-header">🔍 每月參數影響程度分析</div>', unsafe_allow_html=True)
         impact_df = results_df.set_index(results_df["Target_Date"].dt.strftime("%Y-%m-%d"))[[f"{col}_Impact" for col in feature_cols]].copy()
         impact_df.columns = feature_cols
         
         if not impact_df.empty and not impact_df.isna().all().all():
-            max_impact_col = impact_df.abs().idxmax(axis=1)
-            impact_df["影響力最大主因"] = max_impact_col
+            try:
+                max_vals = impact_df.abs().max(axis=1)
+                valid_rows = max_vals > 0
+                max_impact_col = pd.Series("資料收集中", index=impact_df.index)
+                if valid_rows.any():
+                    max_impact_col.loc[valid_rows] = impact_df.loc[valid_rows].abs().idxmax(axis=1)
+                impact_df["影響力最大主因"] = max_impact_col
+            except Exception:
+                impact_df["影響力最大主因"] = "資料收集中"
         else:
             impact_df["影響力最大主因"] = "資料收集中"
 
