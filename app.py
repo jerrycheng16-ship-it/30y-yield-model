@@ -8,7 +8,7 @@ from sklearn.linear_model import RidgeCV
 from fredapi import Fred
 
 # 網頁版面設定
-st.set_page_config(page_title="美國 30 年期公債殖利率總經機器學習預測 (ISM PMI 驅動)", layout="wide")
+st.set_page_config(page_title="美國 30 年期公債殖利率總經機器學習預測 (零售銷售驅動)", layout="wide")
 
 st.markdown(
     """
@@ -37,8 +37,8 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率總經機器學習預測 (ISM PMI 驅動)</div>', unsafe_allow_html=True)
-st.markdown("### 【功能說明】透過聖路易聯準會官方 FRED API 抓取真實月度總經數據（失業率、CPI YoY、ISM 製造業 PMI），結合跨資產動能進行機器學習預測與特徵歸因分析。")
+st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率總經機器學習預測 (零售銷售驅動)</div>', unsafe_allow_html=True)
+st.markdown("### 【功能說明】透過聖路易聯準會官方 FRED API 抓取真實月度總經數據（失業率、CPI YoY、零售銷售 YoY），結合跨資產動能進行機器學習預測與特徵歸因分析。")
 
 # -------------------------------------------------------------
 # 側邊欄參數與 FRED API Key 設定
@@ -69,18 +69,18 @@ if run_btn:
     if not fred_api_key:
         st.error("❌ 請先在側邊欄輸入 FRED API Key！")
     else:
-        with st.spinner("正在透過 FRED API 同步官方真實總經數據（含 ISM PMI）與 Yahoo Finance 資產價格，請稍候..."):
+        with st.spinner("正在透過 FRED API 同步官方真實總經數據（含零售銷售 YoY）與 Yahoo Finance 資產價格，請稍候..."):
             try:
                 fred = Fred(api_key=fred_api_key.strip())
                 
-                # 抓取官方月度序列：失業率、CPI、ISM 製造業指數 (使用 NAPM 代號)
+                # 抓取官方月度序列：失業率、CPI、零售與餐飲銷售總額 (RSXFS)
                 unrate = fred.get_series('UNRATE')
                 cpi = fred.get_series('CPIAUCSL')
-                ism_pmi = fred.get_series('NAPM') 
+                retail = fred.get_series('RSXFS') 
                 
                 unrate_df = pd.DataFrame({'Unemployment_Rate': unrate})
                 cpi_df = pd.DataFrame({'CPI': cpi})
-                ism_df = pd.DataFrame({'ISM_PMI': ism_pmi})
+                retail_df = pd.DataFrame({'Retail_Sales': retail})
             except Exception as e:
                 st.error(f"❌ FRED API 連線或抓取失敗，請確認您的 API Key 是否正確。錯誤訊息: {e}")
                 st.stop()
@@ -109,8 +109,9 @@ if run_btn:
             cpi_monthly = cpi_df.resample("ME").last().ffill()
             macro_df["CPI_YoY"] = cpi_monthly["CPI"].pct_change(12) * 100
             
-            # 對齊 ISM 製造業 PMI
-            macro_df["ISM_PMI"] = ism_df.resample("ME").last().ffill()
+            # 計算精準的零售銷售年增率 (Retail Sales YoY %)
+            retail_monthly = retail_df.resample("ME").last().ffill()
+            macro_df["Retail_Sales_YoY"] = retail_monthly["Retail_Sales"].pct_change(12) * 100
 
             # 跨資產過去 12 個月動能 (%)
             macro_df["SP500_Mom12M"] = df_m["^GSPC"].pct_change(12) * 100
@@ -122,7 +123,7 @@ if run_btn:
             
             # 核心特徵清單
             feature_cols = [
-                "Unemployment_Rate", "CPI_YoY", "ISM_PMI", 
+                "Unemployment_Rate", "CPI_YoY", "Retail_Sales_YoY", 
                 "SP500_Mom12M", "USD_Mom12M", "Gold_Mom12M"
             ]
             macro_df = macro_df.dropna(subset=feature_cols)
@@ -216,12 +217,12 @@ if st.session_state.prediction_executed:
         st.markdown('<div class="section-header">📅 每月輸入參數與預測結果明細表</div>', unsafe_allow_html=True)
         show_input_df = results_df[[
             "Actual", "Predicted", 
-            "Unemployment_Rate_Value", "CPI_YoY_Value", "ISM_PMI_Value",
+            "Unemployment_Rate_Value", "CPI_YoY_Value", "Retail_Sales_YoY_Value",
             "SP500_Mom12M_Value", "USD_Mom12M_Value", "Gold_Mom12M_Value"
         ]].copy()
         show_input_df.columns = [
             "實際殖利率", "預測殖利率", 
-            "失業率(%)", "CPI YoY(%)", "ISM PMI",
+            "失業率(%)", "CPI YoY(%)", "零售銷售 YoY(%)",
             "S&P500動能(%)", "美元動能(%)", "黃金動能(%)"
         ]
         show_input_df.index = show_input_df.index.strftime("%Y-%m-%d")
@@ -229,7 +230,7 @@ if st.session_state.prediction_executed:
 
         # 2. 每個月哪一個參數影響程度最大
         st.markdown('<div class="section-header">🔍 每月參數影響程度分析（正向拉升 / 負向壓抑）</div>', unsafe_allow_html=True)
-        st.caption("說明：數值代表該參數當期對預測結果的「貢獻度大小」（標準化特徵值 × 模型權重）。正值代表推升殖利率，負值代表壓抑殖利率。")
+        st.caption("說明：數值代表該參數當期對預測結果的專屬「貢獻度大小」（標準化特徵值 × 模型權重）。正值代表推升殖利率，負值代表壓抑殖利率。")
 
         impact_df = results_df[[f"{col}_Impact" for col in feature_cols]].copy()
         impact_df.columns = feature_cols
