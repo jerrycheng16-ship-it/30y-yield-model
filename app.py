@@ -13,7 +13,7 @@ from sklearn.linear_model import RidgeCV
 from fredapi import Fred
 
 # 網頁版面設定
-st.set_page_config(page_title="美國 30 年期公債殖利率多期預測系統 (總經變動量實驗)", layout="wide")
+st.set_page_config(page_title="美國 30 年期公債殖利率多期預測系統 (跨資產動能實驗)", layout="wide")
 
 st.markdown(
     """
@@ -42,18 +42,20 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率多期預測系統 (總經變動量實驗版)</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率多期預測系統 (動能週期實驗版)</div>', unsafe_allow_html=True)
 
 # -------------------------------------------------------------
 # 網頁上的預測邏輯與架構說明 Tag (Expander)
 # -------------------------------------------------------------
-with st.expander("📖 點此展開：核心預測邏輯與總經變動量實驗說明文件", expanded=False):
+with st.expander("📖 點此展開：核心預測邏輯與跨資產動能週期實驗說明文件", expanded=False):
     st.markdown("""
-    ### 🧠 總經變動量（Delta）特徵實驗說明
+    ### 🧠 跨資產動能週期（Momentum Window）實驗說明
     
-    本版本支援將總經指標（失業率、通膨預期、WEI週經濟指數）從**絕對水準（Level）**切換為**月變動量（$\Delta$, Monthly Diff）**：
-    * **絕對水準（Level）**：捕捉經濟數據的實質高低位（例如失業率在 3.5% 還是 6%）。
-    * **月變動量（Delta）**：捕捉經濟數據的**邊際變化速度**（例如失業率是加速惡化還是改善）。在債市定價中，邊際變化往往比絕對水準更能提前引發利率轉折。
+    本版本支援調整跨資產動能（S&P 500、美元指數、黃金）的回測計算視窗：
+    * **1 個月 (1M)**：捕捉超短期資金流向與高頻情緒突發變化。
+    * **3 個月 (3M) / 6 個月 (6M)**：中期趨勢跟隨，過濾單月雜訊。
+    * **12 個月 (12M)**：傳統長天期宏觀動能（預設值）。
+    您可以藉由側邊欄切換不同的動能視窗，觀察勝率、年化報酬率與最大回落（MDD）的變化。
     """)
 
 # -------------------------------------------------------------
@@ -83,7 +85,15 @@ strategy_mode = st.sidebar.selectbox(
 macro_feature_type = st.sidebar.selectbox(
     "總經特徵呈現方式",
     options=["絕對水準 (Level)", "月變動量 (Delta / Diff)"],
-    index=1 # 預設選取變動量讓您直接測試
+    index=1
+)
+
+# 新增：動能週期選擇
+momentum_window = st.sidebar.selectbox(
+    "跨資產動能計算週期",
+    options=[1, 3, 6, 12],
+    index=3,
+    format_func=lambda x: f"{x} 個月動能 (Mom{x}M)"
 )
 
 train_window = st.sidebar.slider("訓練月數 (Train Window)", min_value=6, max_value=60, value=36, step=6)
@@ -99,7 +109,7 @@ if run_btn:
     if not fred_api_key:
         st.error("❌ 請先在側邊欄輸入 FRED API Key！")
     else:
-        with st.spinner(f"正在同步數據（總經特徵模式：{macro_feature_type}），並執行預測與回測..."):
+        with st.spinner(f"正在同步數據（動能週期：{momentum_window}M），並執行預測與回測..."):
             try:
                 fred = Fred(api_key=fred_api_key.strip())
                 unrate = fred.get_series('UNRATE')
@@ -167,7 +177,7 @@ if run_btn:
             macro_df["MACD_Diff"] = df_m["MACD_Diff"]
             macro_df["Volatility_MOVE"] = df_m["Volatility_MOVE"]
             
-            # 處理總經數據（Level vs Delta）
+            # 處理總經數據
             raw_unrate = unrate_df.resample("ME").last()
             raw_t5yie = t5yie_df.resample("ME").last()
             raw_wei = wei_df.resample("ME").last()
@@ -181,9 +191,10 @@ if run_btn:
                 macro_df["Inflation_Expectation"] = raw_t5yie["Inflation_Expectation"]
                 macro_df["WEI"] = raw_wei["WEI"]
 
-            macro_df["SP500_Mom12M"] = prices_m["^GSPC"].pct_change(12) * 100
-            macro_df["USD_Mom12M"] = prices_m["DX-Y.NYB"].pct_change(12) * 100
-            macro_df["Gold_Mom12M"] = prices_m["GC=F"].pct_change(12) * 100
+            # 根據使用者選擇的動能週期計算百分比變動
+            macro_df["SP500_Mom"] = prices_m["^GSPC"].pct_change(momentum_window) * 100
+            macro_df["USD_Mom"] = prices_m["DX-Y.NYB"].pct_change(momentum_window) * 100
+            macro_df["Gold_Mom"] = prices_m["GC=F"].pct_change(momentum_window) * 100
 
             macro_df["Current_TYX"] = macro_df["TYX"]
             macro_df["Future_TYX"] = macro_df["TYX"].shift(-forecast_horizon)
@@ -191,14 +202,14 @@ if run_btn:
             
             feature_cols = [
                 "Unemployment_Rate", "Inflation_Expectation", "WEI", 
-                "SP500_Mom12M", "USD_Mom12M", "Gold_Mom12M",
+                "SP500_Mom", "USD_Mom", "Gold_Mom",
                 "RSI_10", "RSI_20", "MACD_Diff", "Volatility_MOVE"
             ]
 
             dates = macro_df.index.sort_values()
             detailed_records = []
 
-            start_idx = train_window
+            start_idx = max(train_window, momentum_window)
             if start_idx >= len(dates) - forecast_horizon:
                 start_idx = max(12, len(dates) // 2)
 
@@ -271,6 +282,7 @@ if run_btn:
                 st.session_state.forecast_horizon = forecast_horizon
                 st.session_state.strategy_mode = strategy_mode
                 st.session_state.macro_feature_type = macro_feature_type
+                st.session_state.momentum_window = momentum_window
 
 if st.session_state.get("prediction_executed", False):
     results_df = st.session_state.get("results_df")
@@ -278,9 +290,10 @@ if st.session_state.get("prediction_executed", False):
     horizon_val = st.session_state.get("forecast_horizon", 1)
     mode_val = st.session_state.get("strategy_mode", "TLT + 現金 (單向多頭)")
     feat_type_val = st.session_state.get("macro_feature_type", "月變動量 (Delta / Diff)")
+    mom_val = st.session_state.get("momentum_window", 12)
     
     if results_df is not None and not results_df.empty:
-        st.markdown(f'<div class="section-header">📈 美國 30 年期公債殖利率：實際值 vs 預測值（總經模式：{feat_type_val}）</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="section-header">📈 美國 30 年期公債殖利率：實際值 vs 預測值（動能週期：{mom_val}M）</div>', unsafe_allow_html=True)
         
         valid_pred_rows = results_df.dropna(subset=["Predicted"])
         if not valid_pred_rows.empty:
@@ -338,7 +351,7 @@ if st.session_state.get("prediction_executed", False):
         # -------------------------------------------------------------
         # 🚀 債券策略回測引擎與績效呈現
         # -------------------------------------------------------------
-        st.markdown(f'<div class="section-header">💰 債券策略回測淨值曲線與績效表現 [{mode_val} | 總經模式：{feat_type_val}]</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="section-header">💰 債券策略回測淨值曲線與績效表現 [{mode_val} | 動能：{mom_val}M]</div>', unsafe_allow_html=True)
         
         backtest_df = results_df.dropna(subset=["Predicted", "TLT_Price", "TBT_Price", "Current_TYX"]).copy()
         if not backtest_df.empty:
