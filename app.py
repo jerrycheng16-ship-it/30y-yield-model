@@ -46,7 +46,7 @@ st.markdown(
 st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率多期預測系統 (含 TLT/TBT 多空雙向策略回測)</div>', unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 側邊欄參數與預測天期設定 (已設定您指定的新預設值)
+# 側邊欄參數與預測天期設定
 # -------------------------------------------------------------
 st.sidebar.header("⚙️ API 與回測參數設定")
 
@@ -61,24 +61,20 @@ fred_api_key = st.sidebar.text_input("FRED API Key (必填)", type="password", v
 if not fred_api_key:
     st.sidebar.warning("⚠️ 請先輸入您的 FRED API Key 方可正確載入真實總經數據。")
 
-# 預設值：預測未來 3 個月
 forecast_horizon = st.sidebar.selectbox("選擇預測天期 (Horizon)", options=[3, 1], format_func=lambda x: f"預測未來 {x} 個月")
 
-# 預設值：TLT + TBT (多空雙向切換)
 strategy_mode = st.sidebar.selectbox(
     "選擇債券策略模式", 
     options=["TLT + TBT (多空雙向切換)", "TLT + 現金 (單向多頭)"],
     index=0
 )
 
-# 預設值：絕對水準 (Level)
 macro_feature_type = st.sidebar.selectbox(
     "總經特徵呈現方式",
     options=["絕對水準 (Level)", "月變動量 (Delta / Diff)"],
     index=0
 )
 
-# 預設值：12 個月動能 (Mom12M)
 momentum_window = st.sidebar.selectbox(
     "跨資產動能計算週期",
     options=[12, 6, 3, 1],
@@ -87,7 +83,6 @@ momentum_window = st.sidebar.selectbox(
 )
 
 train_window = st.sidebar.slider("訓練月數 (Train Window)", min_value=6, max_value=60, value=36, step=6)
-# 預設開始日期調早至 2014-01-31
 target_start_date = st.sidebar.date_input("回測開始日期", pd.to_datetime("2014-01-31"))
 target_end_date = st.sidebar.date_input("回測結束日期", pd.to_datetime("2026-12-31"))
 
@@ -298,7 +293,7 @@ if st.session_state.get("prediction_executed", False):
             mcol3.metric("預測目標結算日", latest_target_date, f"模型: {'LightGBM' if HAS_LGB else 'RidgeCV'}")
 
         # -------------------------------------------------------------
-        # 📊 使用 Plotly 繪製互動式圖表 (徹底解決標題與圖例重疊)
+        # 📊 使用 Plotly 繪製互動式圖表
         # -------------------------------------------------------------
         valid_chart_df = results_df.dropna(subset=["Predicted", "Current_TYX"]).copy()
         if not valid_chart_df.empty:
@@ -309,21 +304,18 @@ if st.session_state.get("prediction_executed", False):
             
             fig = go.Figure()
 
-            # 1. 實際利率線
             fig.add_trace(go.Scatter(
                 x=valid_chart_df["Target_Date"], y=valid_chart_df["Current_TYX"],
                 mode='lines', name='實際利率 (Current TYX)',
                 line=dict(color='#00d2ff', width=2.5)
             ))
 
-            # 2. 預測利率線
             fig.add_trace(go.Scatter(
                 x=valid_chart_df["Target_Date"], y=valid_chart_df["Predicted"],
                 mode='lines', name=f'預測值 (+{horizon_val}M)',
                 line=dict(color='#ff9900', width=2, dash='dot')
             ))
 
-            # 3. 標示買入 TLT 時點 (Signal == 1)
             buy_df = valid_chart_df[valid_chart_df["Signal"] == 1]
             if not buy_df.empty:
                 fig.add_trace(go.Scatter(
@@ -332,7 +324,6 @@ if st.session_state.get("prediction_executed", False):
                     marker=dict(color='#00ff66', size=9, symbol='triangle-up')
                 ))
 
-            # 4. 標示 TBT 或平倉時點 (Signal <= 0)
             sell_df = valid_chart_df[valid_chart_df["Signal"] <= 0]
             if not sell_df.empty:
                 label_name = '🔴 買入 TBT' if mode_val.startswith("TLT + TBT") else '🔴 平倉/現金'
@@ -411,103 +402,4 @@ if st.session_state.get("prediction_executed", False):
                 benchmark_ret = tlt_ret
             else:
                 backtest_df["Signal"] = np.where(backtest_df["Predicted"] < backtest_df["Current_TYX"], 1, -1)
-                strategy_ret = np.where(backtest_df["Signal"].shift(1) == 1, tlt_ret, tbt_ret)
-                backtest_df["Strategy_Return"] = strategy_ret
-                benchmark_ret = tlt_ret
-
-            backtest_df["Strategy_Return"] = backtest_df["Strategy_Return"].fillna(0)
-            backtest_df["Benchmark_Nav"] = (1.0 + benchmark_ret.fillna(0)).cumprod()
-            backtest_df["Strategy_Nav"] = (1.0 + backtest_df["Strategy_Return"]).cumprod()
-
-            total_days = (backtest_df.index[-1] - backtest_df.index[0]).days
-            years = max(total_days / 365.25, 0.5)
-            
-            strat_total_return = backtest_df["Strategy_Nav"].iloc[-1] - 1.0
-            strat_cagr = (backtest_df["Strategy_Nav"].iloc[-1] ** (1 / years)) - 1.0
-            
-            bench_total_return = backtest_df["Benchmark_Nav"].iloc[-1] - 1.0
-            bench_cagr = (backtest_df["Benchmark_Nav"].iloc[-1] ** (1 / years)) - 1.0
-
-            strat_rolling_max = backtest_df["Strategy_Nav"].cummax()
-            strat_drawdown = (backtest_df["Strategy_Nav"] - strat_rolling_max) / strat_rolling_max
-            strat_mdd = strat_drawdown.min()
-
-            bench_rolling_max = backtest_df["Benchmark_Nav"].cummax()
-            bench_drawdown = (backtest_df["Benchmark_Nav"] - bench_rolling_max) / bench_rolling_max
-            bench_mdd = bench_drawdown.min()
-
-            pcol1, pcol2, pcol3, pcol4 = st.columns(4)
-            pcol1.metric("策略年化報酬率 (CAGR)", f"{strat_cagr * 100:.2f}%", f"基准(TLT): {bench_cagr * 100:.2f}%")
-            pcol2.metric("策略總報酬率", f"{strat_total_return * 100:.2f}%", f"基准: {bench_total_return * 100:.2f}%")
-            pcol3.metric("策略最大回落 (MDD)", f"{strat_mdd * 100:.2f}%", f"基准: {bench_mdd * 100:.2f}%")
-            pcol4.metric("回測期間", f"{years:.1f} 年", f"{len(backtest_df)} 個交易點")
-
-            nav_chart_df = backtest_df[["Strategy_Nav", "Benchmark_Nav"]].copy()
-            nav_chart_df.columns = [f"策略淨值曲線 ({mode_val})", "TLT 買入持有 (Benchmark)"]
-            st.line_chart(nav_chart_df)
-        else:
-            st.warning("⚠️ 目前回測期間資料不足，無法計算策略績效。")
-
-        # -------------------------------------------------------------
-        # 📅 每月預測與交易策略訊號明細表
-        # -------------------------------------------------------------
-        st.markdown(f'<div class="section-header">📅 每月預測與交易策略訊號明細表</div>', unsafe_allow_html=True)
-        
-        show_table_df = results_df[[
-            "Target_Date", "Current_TYX", "Actual", "Predicted"
-        ]].copy()
-
-        show_table_df["預測利率降息(買入TLT)"] = show_table_df["Predicted"] < show_table_df["Current_TYX"]
-        if mode_val.startswith("TLT + 現金"):
-            show_table_df["策略訊號動作"] = np.where(show_table_df["預測利率降息(買入TLT)"], "🟢 買入並持有 TLT", "🔴 平倉 / 持有現金")
-        else:
-            show_table_df["策略訊號動作"] = np.where(show_table_df["預測利率降息(買入TLT)"], "🟢 買入 TLT (多頭)", "🔴 買入 TBT (空頭)")
-
-        show_table_df["Pred_Dir"] = show_table_df["Predicted"] > show_table_df["Current_TYX"]
-        show_table_df["Actual_Dir"] = show_table_df["Actual"] > show_table_df["Current_TYX"]
-        show_table_df["方向勝率判斷"] = np.where(
-            show_table_df["Actual"].isna() | show_table_df["Predicted"].isna(),
-            "⏳ 最新即時預測 (待揭曉)",
-            np.where(show_table_df["Pred_Dir"] == show_table_df["Actual_Dir"], "✅ 正確 (Hit)", "❌ 錯誤 (Miss)")
-        )
-        
-        show_table_df["Target_Date"] = pd.to_datetime(show_table_df["Target_Date"]).dt.strftime("%Y-%m-%d")
-        show_table_df.index = show_table_df.index.strftime("%Y-%m-%d")
-        
-        final_display_df = show_table_df[[
-            "Target_Date", "Current_TYX", "Actual", "Predicted", "策略訊號動作", "方向勝率判斷"
-        ]].copy()
-
-        final_display_df.columns = [
-            f"預測目標月份 (+{horizon_val}M)", "當月基準實際利率", "目標期實際利率", "預測殖利率", "策略訊號動作 (進出點)", "方向預測結果"
-        ]
-        st.dataframe(final_display_df.round(3), use_container_width=True)
-
-        # -------------------------------------------------------------
-        # 🔍 每月參數影響程度與關鍵影響因子分析表
-        # -------------------------------------------------------------
-        st.markdown(f'<div class="section-header">🔍 每月參數影響程度與關鍵影響因子分析</div>', unsafe_allow_html=True)
-        
-        impact_df = results_df.set_index(results_df["Target_Date"].dt.strftime("%Y-%m-%d"))[[f"{col}_Impact" for col in feature_cols]].copy()
-        impact_df.columns = feature_cols
-        
-        if not impact_df.empty and not impact_df.isna().all().all():
-            try:
-                max_vals = impact_df.abs().max(axis=1)
-                valid_rows = max_vals > 0
-                max_impact_col = pd.Series("資料收集中", index=impact_df.index)
-                if valid_rows.any():
-                    max_impact_col.loc[valid_rows] = impact_df.loc[valid_rows].abs().idxmax(axis=1)
-                impact_df["影響力最大主因"] = max_impact_col
-            except Exception:
-                impact_df["影響力最大主因"] = "資料收集中"
-        else:
-            impact_df["影響力最大主因"] = "資料收集中"
-
-        final_impact_display = impact_df[["影響力最大主因"] + feature_cols].copy()
-        final_impact_display.columns = ["影響力最大主因"] + [
-            "失業率(Unrate)", "5年通膨預期(T5YIE)", "WEI週經濟", 
-            f"S&P500動能({mom_val}M)", f"美元動能({mom_val}M)", f"黃金動能({mom_val}M)",
-            "RSI(10)", "RSI(20)", "MACD差值", "MOVE波動率"
-        ]
-        st.dataframe(final_impact_display.round(3), use_container_width=True)
+                strategy_ret = np.where(backtest_df["Signal"].shift(1) == 1, tlt_ret, tbt_
