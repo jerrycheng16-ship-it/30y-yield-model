@@ -402,4 +402,128 @@ if st.session_state.get("prediction_executed", False):
                 benchmark_ret = tlt_ret
             else:
                 backtest_df["Signal"] = np.where(backtest_df["Predicted"] < backtest_df["Current_TYX"], 1, -1)
-                strategy_ret = np.where(backtest_df["Signal"].shift(1) == 1, tlt_ret, tbt_
+                strategy_ret = np.where(backtest_df["Signal"].shift(1) == 1, tlt_ret, tbt_ret)
+                backtest_df["Strategy_Return"] = strategy_ret
+                benchmark_ret = tlt_ret
+
+            backtest_df["Strategy_Return"] = backtest_df["Strategy_Return"].fillna(0)
+            backtest_df["Benchmark_Nav"] = (1.0 + benchmark_ret.fillna(0)).cumprod()
+            backtest_df["Strategy_Nav"] = (1.0 + backtest_df["Strategy_Return"]).cumprod()
+
+            total_days = (backtest_df.index[-1] - backtest_df.index[0]).days
+            years = max(total_days / 365.25, 0.5)
+            
+            strat_total_return = backtest_df["Strategy_Nav"].iloc[-1] - 1.0
+            strat_cagr = (backtest_df["Strategy_Nav"].iloc[-1] ** (1 / years)) - 1.0
+            
+            bench_total_return = backtest_df["Benchmark_Nav"].iloc[-1] - 1.0
+            bench_cagr = (backtest_df["Benchmark_Nav"].iloc[-1] ** (1 / years)) - 1.0
+
+            strat_rolling_max = backtest_df["Strategy_Nav"].cummax()
+            strat_drawdown = (backtest_df["Strategy_Nav"] - strat_rolling_max) / strat_rolling_max
+            strat_mdd = strat_drawdown.min()
+
+            bench_rolling_max = backtest_df["Benchmark_Nav"].cummax()
+            bench_drawdown = (backtest_df["Benchmark_Nav"] - bench_rolling_max) / bench_rolling_max
+            bench_mdd = bench_drawdown.min()
+
+            pcol1, pcol2, pcol3, pcol4 = st.columns(4)
+            pcol1.metric("策略年化報酬率 (CAGR)", f"{strat_cagr * 100:.2f}%", f"基准(TLT): {bench_cagr * 100:.2f}%")
+            pcol2.metric("策略總報酬率", f"{strat_total_return * 100:.2f}%", f"基准: {bench_total_return * 100:.2f}%")
+            pcol3.metric("策略最大回落 (MDD)", f"{strat_mdd * 100:.2f}%", f"基准: {bench_mdd * 100:.2f}%")
+            pcol4.metric("回測期間", f"{years:.1f} 年", f"{len(backtest_df)} 個交易點")
+
+            nav_chart_df = backtest_df[["Strategy_Nav", "Benchmark_Nav"]].copy()
+            nav_chart_df.columns = [f"策略淨值曲線 ({mode_val})", "TLT 買入持有 (Benchmark)"]
+            st.line_chart(nav_chart_df)
+        else:
+            st.warning("⚠️ 目前回測期間資料不足，無法計算策略績效。")
+
+        # -------------------------------------------------------------
+        # 📅 每月預測與交易策略訊號明細表 (已改為降冪排序：最近日期在最上方)
+        # -------------------------------------------------------------
+        st.markdown(f'<div class="section-header">📅 每月預測與交易策略訊號明細表</div>', unsafe_allow_html=True)
+        
+        show_table_df = results_df[[
+            "Target_Date", "Current_TYX", "Actual", "Predicted"
+        ]].copy()
+
+        show_table_df["預測利率降息(買入TLT)"] = show_table_df["Predicted"] < show_table_df["Current_TYX"]
+        if mode_val.startswith("TLT + 現金"):
+            show_table_df["策略訊號動作"] = np.where(show_table_df["預測利率降息(買入TLT)"], "🟢 買入並持有 TLT", "🔴 平倉 / 持有現金")
+        else:
+            show_table_df["策略訊號動作"] = np.where(show_table_df["預測利率降息(買入TLT)"], "🟢 買入 TLT (多頭)", "🔴 買入 TBT (空頭)")
+
+        show_table_df["Pred_Dir"] = show_table_df["Predicted"] > show_table_df["Current_TYX"]
+        show_table_df["Actual_Dir"] = show_table_df["Actual"] > show_table_df["Current_TYX"]
+        show_table_df["方向勝率判斷"] = np.where(
+            show_table_df["Actual"].isna() | show_table_df["Predicted"].isna(),
+            "⏳ 最新即時預測 (待揭曉)",
+            np.where(show_table_df["Pred_Dir"] == show_table_df["Actual_Dir"], "✅ 正確 (Hit)", "❌ 錯誤 (Miss)")
+        )
+        
+        show_table_df["Target_Date"] = pd.to_datetime(show_table_df["Target_Date"]).dt.strftime("%Y-%m-%d")
+        show_table_df.index = show_table_df.index.strftime("%Y-%m-%d")
+        
+        final_display_df = show_table_df[[
+            "Target_Date", "Current_TYX", "Actual", "Predicted", "策略訊號動作", "方向勝率判斷"
+        ]].copy()
+
+        final_display_df.columns = [
+            f"預測目標月份 (+{horizon_val}M)", "當月基準實際利率", "目標期實際利率", "預測殖利率", "策略訊號動作 (進出點)", "方向預測結果"
+        ]
+        # 降冪排序 (最近日期在最上方)
+        final_display_df = final_display_df.sort_index(ascending=False)
+        st.dataframe(final_display_df.round(3), use_container_width=True)
+
+        # -------------------------------------------------------------
+        # 🔍 每月收集到的特徵數值與關鍵影響因子總表 (已改為降冪排序：最近日期在最上方)
+        # -------------------------------------------------------------
+        st.markdown(f'<div class="section-header">🔍 收集到的特徵數字與關鍵影響力分析總表</div>', unsafe_allow_html=True)
+        st.markdown("說明：表格中每個欄位同時顯示 **[當月收集到的實際數值] (影響力貢獻值)**，最左側欄位直接告訴您該月份影響力最大的是哪一個數字。")
+
+        display_combined_rows = []
+        for dt, row in results_df.iterrows():
+            date_str = pd.to_datetime(dt).strftime("%Y-%m-%d")
+            
+            max_col = "無"
+            max_val = -1.0
+            for col in feature_cols:
+                imp = row.get(f"{col}_Impact", 0)
+                if not pd.isna(imp) and abs(imp) > max_val:
+                    max_val = abs(imp)
+                    max_col = col
+
+            row_data = {"特徵日期": date_str, "影響力最大主因": max_col}
+            
+            col_names_map = {
+                "Unemployment_Rate": "失業率(Unrate)",
+                "Inflation_Expectation": "5年通膨預期(T5YIE)",
+                "WEI": "WEI週經濟",
+                "SP500_Mom": f"S&P500動能({mom_val}M)",
+                "USD_Mom": f"美元動能({mom_val}M)",
+                "Gold_Mom": f"黃金動能({mom_val}M)",
+                "RSI_10": "RSI(10)",
+                "RSI_20": "RSI(20)",
+                "MACD_Diff": "MACD差值",
+                "Volatility_MOVE": "MOVE波動率"
+            }
+
+            for col in feature_cols:
+                val = row.get(f"{col}_Value", np.nan)
+                imp = row.get(f"{col}_Impact", np.nan)
+                
+                val_str = f"{val:.2f}" if not pd.isna(val) else "N/A"
+                imp_str = f"{imp:+.4f}" if not pd.isna(imp) else "N/A"
+                
+                display_name = col_names_map.get(col, col)
+                row_data[display_name] = f"{val_str} (影響:{imp_str})"
+
+            display_combined_rows.append(row_data)
+
+        combined_df = pd.DataFrame(display_combined_rows)
+        if not combined_df.empty:
+            combined_df = combined_df.set_index("特徵日期")
+            # 降冪排序 (最近日期在最上方)
+            combined_df = combined_df.sort_index(ascending=False)
+            st.dataframe(combined_df, use_container_width=True)
