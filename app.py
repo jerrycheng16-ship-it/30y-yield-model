@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import plotly.graph_objects as go
 from requests import Session
 from sklearn.preprocessing import StandardScaler
 try:
@@ -13,7 +14,7 @@ from sklearn.linear_model import RidgeCV
 from fredapi import Fred
 
 # 網頁版面設定
-st.set_page_config(page_title="美國 30 年期公債殖利率多期預測系統 (跨資產動能實驗)", layout="wide")
+st.set_page_config(page_title="美國 30 年期公債殖利率多期預測系統 (交易點標示)", layout="wide")
 
 st.markdown(
     """
@@ -42,21 +43,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率多期預測系統 (動能週期實驗版)</div>', unsafe_allow_html=True)
-
-# -------------------------------------------------------------
-# 網頁上的預測邏輯與架構說明 Tag (Expander)
-# -------------------------------------------------------------
-with st.expander("📖 點此展開：核心預測邏輯與跨資產動能週期實驗說明文件", expanded=False):
-    st.markdown("""
-    ### 🧠 跨資產動能週期（Momentum Window）實驗說明
-    
-    本版本支援調整跨資產動能（S&P 500、美元指數、黃金）的回測計算視窗：
-    * **1 個月 (1M)**：捕捉超短期資金流向與高頻情緒突發變化。
-    * **3 個月 (3M) / 6 個月 (6M)**：中期趨勢跟隨，過濾單月雜訊。
-    * **12 個月 (12M)**：傳統長天期宏觀動能（預設值）。
-    您可以藉由側邊欄切換不同的動能視窗，觀察勝率、年化報酬率與最大回落（MDD）的變化。
-    """)
+st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率多期預測系統 (含互動式進出點標示圖表)</div>', unsafe_allow_html=True)
 
 # -------------------------------------------------------------
 # 側邊欄參數與預測天期設定
@@ -88,11 +75,10 @@ macro_feature_type = st.sidebar.selectbox(
     index=1
 )
 
-# 新增：動能週期選擇
 momentum_window = st.sidebar.selectbox(
     "跨資產動能計算週期",
     options=[1, 3, 6, 12],
-    index=3,
+    index=0, # 預設 1M 配合您的截圖
     format_func=lambda x: f"{x} 個月動能 (Mom{x}M)"
 )
 
@@ -109,7 +95,7 @@ if run_btn:
     if not fred_api_key:
         st.error("❌ 請先在側邊欄輸入 FRED API Key！")
     else:
-        with st.spinner(f"正在同步數據（動能週期：{momentum_window}M），並執行預測與回測..."):
+        with st.spinner(f"正在同步數據並執行回測..."):
             try:
                 fred = Fred(api_key=fred_api_key.strip())
                 unrate = fred.get_series('UNRATE')
@@ -123,7 +109,6 @@ if run_btn:
                 st.error(f"❌ FRED API 連線失敗: {e}")
                 st.stop()
 
-            # 1. 下載資產價格
             session = Session()
             session.headers.update({
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -175,9 +160,8 @@ if run_btn:
             macro_df["RSI_10"] = df_m["RSI_10"]
             macro_df["RSI_20"] = df_m["RSI_20"]
             macro_df["MACD_Diff"] = df_m["MACD_Diff"]
-            macro_df["Volatility_MOVE"] = df_m["Volatility_MOVE"]
+            macro_df["Volatility_MOVE"] = move_series.resample("ME").last().ffill()
             
-            # 處理總經數據
             raw_unrate = unrate_df.resample("ME").last()
             raw_t5yie = t5yie_df.resample("ME").last()
             raw_wei = wei_df.resample("ME").last()
@@ -191,7 +175,6 @@ if run_btn:
                 macro_df["Inflation_Expectation"] = raw_t5yie["Inflation_Expectation"]
                 macro_df["WEI"] = raw_wei["WEI"]
 
-            # 根據使用者選擇的動能週期計算百分比變動
             macro_df["SP500_Mom"] = prices_m["^GSPC"].pct_change(momentum_window) * 100
             macro_df["USD_Mom"] = prices_m["DX-Y.NYB"].pct_change(momentum_window) * 100
             macro_df["Gold_Mom"] = prices_m["GC=F"].pct_change(momentum_window) * 100
@@ -289,11 +272,10 @@ if st.session_state.get("prediction_executed", False):
     feature_cols = st.session_state.get("feature_cols")
     horizon_val = st.session_state.get("forecast_horizon", 1)
     mode_val = st.session_state.get("strategy_mode", "TLT + 現金 (單向多頭)")
-    feat_type_val = st.session_state.get("macro_feature_type", "月變動量 (Delta / Diff)")
-    mom_val = st.session_state.get("momentum_window", 12)
+    mom_val = st.session_state.get("momentum_window", 1)
     
     if results_df is not None and not results_df.empty:
-        st.markdown(f'<div class="section-header">📈 美國 30 年期公債殖利率：實際值 vs 預測值（動能週期：{mom_val}M）</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="section-header">📈 美國 30 年期公債殖利率：實際值 vs 預測值（含 TLT 買進/出場時點標示）</div>', unsafe_allow_html=True)
         
         valid_pred_rows = results_df.dropna(subset=["Predicted"])
         if not valid_pred_rows.empty:
@@ -310,11 +292,59 @@ if st.session_state.get("prediction_executed", False):
             mcol2.metric(f"最新預測利率 (+{horizon_val}M)", f"{pred_rate:.2f}%", f"{'+' if diff_rate >= 0 else ''}{diff_rate:.2f}% vs 當前")
             mcol3.metric("預測目標結算日", latest_target_date, f"模型: {'LightGBM' if HAS_LGB else 'RidgeCV'}")
 
-        valid_chart_df = results_df.dropna(subset=["Predicted", "Actual"])
+        # -------------------------------------------------------------
+        # 📊 使用 Plotly 繪製帶有進出點標示的互動式圖表
+        # -------------------------------------------------------------
+        valid_chart_df = results_df.dropna(subset=["Predicted", "Current_TYX"]).copy()
         if not valid_chart_df.empty:
-            chart_data = valid_chart_df.set_index("Target_Date")[["Actual", "Predicted"]]
-            chart_data.columns = [f"實際 30 年公債殖利率 (+{horizon_val}M)", f"機器學習預測值 (+{horizon_val}M)"]
-            st.line_chart(chart_data)
+            valid_chart_df["Signal"] = np.where(valid_chart_df["Predicted"] < valid_chart_df["Current_TYX"], 1, 0)
+            
+            fig = go.Figure()
+
+            # 1. 實際利率線
+            fig.add_trace(go.Scatter(
+                x=valid_chart_df["Target_Date"], y=valid_chart_df["Current_TYX"],
+                mode='lines', name='實際 30 年公債利率 (Current TYX)',
+                line=dict(color='#00d2ff', width=2.5)
+            ))
+
+            # 2. 預測利率線
+            fig.add_trace(go.Scatter(
+                x=valid_chart_df["Target_Date"], y=valid_chart_df["Predicted"],
+                mode='lines', name=f'機器學習預測值 (+{horizon_val}M)',
+                line=dict(color='#ff9900', width=2, dash='dot')
+            ))
+
+            # 3. 標示買入 TLT 時點 (Signal == 1)
+            buy_df = valid_chart_df[valid_chart_df["Signal"] == 1]
+            if not buy_df.empty:
+                fig.add_trace(go.Scatter(
+                    x=buy_df["Target_Date"], y=buy_df["Current_TYX"],
+                    mode='markers', name='🟢 買入 TLT (預期利率降)',
+                    marker=dict(color='#00ff66', size=10, symbol='triangle-up')
+                ))
+
+            # 4. 標示平倉/賣出時點 (Signal == 0)
+            sell_df = valid_chart_df[valid_chart_df["Signal"] == 0]
+            if not sell_df.empty:
+                fig.add_trace(go.Scatter(
+                    x=sell_df["Target_Date"], y=sell_df["Current_TYX"],
+                    mode='markers', name='🔴 平倉/賣出 (預期利率升)',
+                    marker=dict(color='#ff3333', size=10, symbol='triangle-down')
+                ))
+
+            fig.update_layout(
+                title=dict(text=f"美國 30 年期公債殖利率與策略進出點標示 (預測天期: +{horizon_val}M)", font=dict(color='white')),
+                xaxis=dict(title="日期", gridcolor='#222629'),
+                yaxis=dict(title="殖利率 (%)", gridcolor='#222629'),
+                paper_bgcolor='#0e1117',
+                plot_bgcolor='#0e1117',
+                font=dict(color='white'),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                margin=dict(l=20, r=20, t=50, b=20)
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
 
         # 3. 計算歷史勝率與期望值
         valid_eval = results_df.dropna(subset=["Actual", "Predicted", "Current_TYX"]).copy()
@@ -351,7 +381,7 @@ if st.session_state.get("prediction_executed", False):
         # -------------------------------------------------------------
         # 🚀 債券策略回測引擎與績效呈現
         # -------------------------------------------------------------
-        st.markdown(f'<div class="section-header">💰 債券策略回測淨值曲線與績效表現 [{mode_val} | 動能：{mom_val}M]</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="section-header">💰 債券策略回測淨值曲線與績效表現 [{mode_val}]</div>', unsafe_allow_html=True)
         
         backtest_df = results_df.dropna(subset=["Predicted", "TLT_Price", "TBT_Price", "Current_TYX"]).copy()
         if not backtest_df.empty:
@@ -400,58 +430,3 @@ if st.session_state.get("prediction_executed", False):
             st.line_chart(nav_chart_df)
         else:
             st.warning("⚠️ 目前回測期間資料不足，無法計算策略績效。")
-
-        # 1. 每月明細表
-        st.markdown(f'<div class="section-header">📅 每月輸入參數與「未來 {horizon_val} 個月預測」明細表</div>', unsafe_allow_html=True)
-        
-        show_table_df = results_df[[
-            "Target_Date", "Current_TYX", "Actual", "Predicted", 
-            "Unemployment_Rate_Value", "Inflation_Expectation_Value", "WEI_Value",
-            "RSI_10_Value", "MACD_Diff_Value", "Volatility_MOVE_Value"
-        ]].copy()
-
-        show_table_df["Pred_Dir"] = show_table_df["Predicted"] > show_table_df["Current_TYX"]
-        show_table_df["Actual_Dir"] = show_table_df["Actual"] > show_table_df["Current_TYX"]
-        show_table_df["方向勝率判斷"] = np.where(
-            show_table_df["Actual"].isna() | show_table_df["Predicted"].isna(),
-            "⏳ 最新即時預測 (待揭曉)",
-            np.where(show_table_df["Pred_Dir"] == show_table_df["Actual_Dir"], "✅ 正確 (Hit)", "❌ 錯誤 (Miss)")
-        )
-        
-        show_table_df["Target_Date"] = pd.to_datetime(show_table_df["Target_Date"]).dt.strftime("%Y-%m-%d")
-        show_table_df.index = show_table_df.index.strftime("%Y-%m-%d")
-        
-        final_display_df = show_table_df[[
-            "Target_Date", "Current_TYX", "Actual", "Predicted", "方向勝率判斷",
-            "Unemployment_Rate_Value", "Inflation_Expectation_Value", "WEI_Value",
-            "RSI_10_Value", "MACD_Diff_Value", "Volatility_MOVE_Value"
-        ]].copy()
-
-        final_display_df.columns = [
-            f"預測目標月份 (+{horizon_val}M)", "當月基準實際利率", "目標期實際利率", "預測殖利率", "方向預測結果",
-            "失業率變動(%)" if feat_type_val.startswith("月變動量") else "失業率(%)", 
-            "5年通膨預期變動(%)" if feat_type_val.startswith("月變動量") else "5年通膨預期(%)", 
-            "WEI週經濟變動" if feat_type_val.startswith("月變動量") else "WEI週經濟", 
-            "RSI(10)", "MACD乖離", "MOVE波動率"
-        ]
-        st.dataframe(final_display_df.round(3), use_container_width=True)
-
-        # 2. 影響力分析
-        st.markdown(f'<div class="section-header">🔍 每月參數影響程度分析</div>', unsafe_allow_html=True)
-        impact_df = results_df.set_index(results_df["Target_Date"].dt.strftime("%Y-%m-%d"))[[f"{col}_Impact" for col in feature_cols]].copy()
-        impact_df.columns = feature_cols
-        
-        if not impact_df.empty and not impact_df.isna().all().all():
-            try:
-                max_vals = impact_df.abs().max(axis=1)
-                valid_rows = max_vals > 0
-                max_impact_col = pd.Series("資料收集中", index=impact_df.index)
-                if valid_rows.any():
-                    max_impact_col.loc[valid_rows] = impact_df.loc[valid_rows].abs().idxmax(axis=1)
-                impact_df["影響力最大主因"] = max_impact_col
-            except Exception:
-                impact_df["影響力最大主因"] = "資料收集中"
-        else:
-            impact_df["影響力最大主因"] = "資料收集中"
-
-        st.dataframe(impact_df.round(3), use_container_width=True)
