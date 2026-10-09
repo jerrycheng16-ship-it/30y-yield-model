@@ -14,7 +14,7 @@ from sklearn.linear_model import RidgeCV
 from fredapi import Fred
 
 # 網頁版面設定
-st.set_page_config(page_title="美國 30 年期公債殖利率多期預測系統 (交易點標示)", layout="wide")
+st.set_page_config(page_title="美國 30 年期公債殖利率多期預測系統 (TLT/TBT 策略回測)", layout="wide")
 
 st.markdown(
     """
@@ -43,10 +43,10 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率多期預測系統 (含互動式進出點標示圖表)</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率多期預測系統 (含 TLT/TBT 多空雙向策略回測)</div>', unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 側邊欄參數與預測天期設定
+# 側邊欄參數與預測天期設定 (已設定您指定的新預設值)
 # -------------------------------------------------------------
 st.sidebar.header("⚙️ API 與回測參數設定")
 
@@ -61,29 +61,34 @@ fred_api_key = st.sidebar.text_input("FRED API Key (必填)", type="password", v
 if not fred_api_key:
     st.sidebar.warning("⚠️ 請先輸入您的 FRED API Key 方可正確載入真實總經數據。")
 
-forecast_horizon = st.sidebar.selectbox("選擇預測天期 (Horizon)", options=[1, 3], format_func=lambda x: f"預測未來 {x} 個月")
+# 預設值：預測未來 3 個月
+forecast_horizon = st.sidebar.selectbox("選擇預測天期 (Horizon)", options=[3, 1], format_func=lambda x: f"預測未來 {x} 個月")
 
+# 預設值：TLT + TBT (多空雙向切換)
 strategy_mode = st.sidebar.selectbox(
     "選擇債券策略模式", 
-    options=["TLT + 現金 (單向多頭)", "TLT + TBT (多空雙向切換)"],
+    options=["TLT + TBT (多空雙向切換)", "TLT + 現金 (單向多頭)"],
     index=0
 )
 
+# 預設值：絕對水準 (Level)
 macro_feature_type = st.sidebar.selectbox(
     "總經特徵呈現方式",
     options=["絕對水準 (Level)", "月變動量 (Delta / Diff)"],
-    index=1
+    index=0
 )
 
+# 預設值：12 個月動能 (Mom12M)
 momentum_window = st.sidebar.selectbox(
     "跨資產動能計算週期",
-    options=[1, 3, 6, 12],
-    index=0, # 預設 1M 配合您的截圖
+    options=[12, 6, 3, 1],
+    index=0, 
     format_func=lambda x: f"{x} 個月動能 (Mom{x}M)"
 )
 
 train_window = st.sidebar.slider("訓練月數 (Train Window)", min_value=6, max_value=60, value=36, step=6)
-target_start_date = st.sidebar.date_input("回測開始日期", pd.to_datetime("2020-01-31"))
+# 預設開始日期調早至 2014-01-31
+target_start_date = st.sidebar.date_input("回測開始日期", pd.to_datetime("2014-01-31"))
 target_end_date = st.sidebar.date_input("回測結束日期", pd.to_datetime("2026-12-31"))
 
 run_btn = st.sidebar.button("🚀 開始執行預測與策略回測")
@@ -270,12 +275,12 @@ if run_btn:
 if st.session_state.get("prediction_executed", False):
     results_df = st.session_state.get("results_df")
     feature_cols = st.session_state.get("feature_cols")
-    horizon_val = st.session_state.get("forecast_horizon", 1)
-    mode_val = st.session_state.get("strategy_mode", "TLT + 現金 (單向多頭)")
-    mom_val = st.session_state.get("momentum_window", 1)
+    horizon_val = st.session_state.get("forecast_horizon", 3)
+    mode_val = st.session_state.get("strategy_mode", "TLT + TBT (多空雙向切換)")
+    mom_val = st.session_state.get("momentum_window", 12)
     
     if results_df is not None and not results_df.empty:
-        st.markdown(f'<div class="section-header">📈 美國 30 年期公債殖利率：實際值 vs 預測值（含 TLT 買進/出場時點標示）</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="section-header">📈 美國 30 年期公債殖利率：實際值 vs 預測值（動能週期：{mom_val}M）</div>', unsafe_allow_html=True)
         
         valid_pred_rows = results_df.dropna(subset=["Predicted"])
         if not valid_pred_rows.empty:
@@ -293,11 +298,14 @@ if st.session_state.get("prediction_executed", False):
             mcol3.metric("預測目標結算日", latest_target_date, f"模型: {'LightGBM' if HAS_LGB else 'RidgeCV'}")
 
         # -------------------------------------------------------------
-        # 📊 使用 Plotly 繪製帶有進出點標示的互動式圖表
+        # 📊 使用 Plotly 繪製互動式圖表 (修正上方文字重疊與標示不清問題)
         # -------------------------------------------------------------
         valid_chart_df = results_df.dropna(subset=["Predicted", "Current_TYX"]).copy()
         if not valid_chart_df.empty:
-            valid_chart_df["Signal"] = np.where(valid_chart_df["Predicted"] < valid_chart_df["Current_TYX"], 1, 0)
+            if mode_val == "TLT + 現金 (单向多头)":
+                valid_chart_df["Signal"] = np.where(valid_chart_df["Predicted"] < valid_chart_df["Current_TYX"], 1, 0)
+            else:
+                valid_chart_df["Signal"] = np.where(valid_chart_df["Predicted"] < valid_chart_df["Current_TYX"], 1, -1)
             
             fig = go.Figure()
 
@@ -324,24 +332,37 @@ if st.session_state.get("prediction_executed", False):
                     marker=dict(color='#00ff66', size=10, symbol='triangle-up')
                 ))
 
-            # 4. 標示平倉/賣出時點 (Signal == 0)
-            sell_df = valid_chart_df[valid_chart_df["Signal"] == 0]
+            # 4. 標示 TBT 或平倉時點 (Signal <= 0)
+            sell_df = valid_chart_df[valid_chart_df["Signal"] <= 0]
             if not sell_df.empty:
+                label_name = '🔴 買入 TBT (預期利率升)' if mode_val.startswith("TLT + TBT") else '🔴 平倉/現金 (預期利率升)'
                 fig.add_trace(go.Scatter(
                     x=sell_df["Target_Date"], y=sell_df["Current_TYX"],
-                    mode='markers', name='🔴 平倉/賣出 (預期利率升)',
+                    mode='markers', name=label_name,
                     marker=dict(color='#ff3333', size=10, symbol='triangle-down')
                 ))
 
+            # 修正版面與邊距配置，徹底解決上方文字重疊問題
             fig.update_layout(
-                title=dict(text=f"美國 30 年期公債殖利率與策略進出點標示 (預測天期: +{horizon_val}M)", font=dict(color='white')),
+                title=dict(
+                    text=f"美國 30 年期公債殖利率與策略進出點標示 (預測天期: +{horizon_val}M)", 
+                    font=dict(color='white', size=16),
+                    x=0.0, y=0.95
+                ),
                 xaxis=dict(title="日期", gridcolor='#222629'),
                 yaxis=dict(title="殖利率 (%)", gridcolor='#222629'),
                 paper_bgcolor='#0e1117',
                 plot_bgcolor='#0e1117',
                 font=dict(color='white'),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                margin=dict(l=20, r=20, t=50, b=20)
+                legend=dict(
+                    orientation="h", 
+                    yanchor="bottom", 
+                    y=1.12,  # 將圖例往上推，避免與圖表標題重疊
+                    xanchor="left", 
+                    x=0.0,
+                    bgcolor='rgba(0,0,0,0)'
+                ),
+                margin=dict(l=40, r=40, t=100, b=40)  # 增加上方邊距 (t=100) 給圖例跟標題空間
             )
 
             st.plotly_chart(fig, use_container_width=True)
