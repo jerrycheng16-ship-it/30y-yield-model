@@ -46,7 +46,7 @@ st.markdown(
 st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率多期預測系統 (含 TLT/TBT 多空雙向策略回測)</div>', unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 側邊欄參數與預測天期設定 (已設定您指定的新預設值)
+# 側邊欄參數與預測天期設定
 # -------------------------------------------------------------
 st.sidebar.header("⚙️ API 與回測參數設定")
 
@@ -61,24 +61,20 @@ fred_api_key = st.sidebar.text_input("FRED API Key (必填)", type="password", v
 if not fred_api_key:
     st.sidebar.warning("⚠️ 請先輸入您的 FRED API Key 方可正確載入真實總經數據。")
 
-# 預設值：預測未來 3 個月
 forecast_horizon = st.sidebar.selectbox("選擇預測天期 (Horizon)", options=[3, 1], format_func=lambda x: f"預測未來 {x} 個月")
 
-# 預設值：TLT + TBT (多空雙向切換)
 strategy_mode = st.sidebar.selectbox(
     "選擇債券策略模式", 
     options=["TLT + TBT (多空雙向切換)", "TLT + 現金 (單向多頭)"],
     index=0
 )
 
-# 預設值：絕對水準 (Level)
 macro_feature_type = st.sidebar.selectbox(
     "總經特徵呈現方式",
     options=["絕對水準 (Level)", "月變動量 (Delta / Diff)"],
     index=0
 )
 
-# 預設值：12 個月動能 (Mom12M)
 momentum_window = st.sidebar.selectbox(
     "跨資產動能計算週期",
     options=[12, 6, 3, 1],
@@ -87,7 +83,6 @@ momentum_window = st.sidebar.selectbox(
 )
 
 train_window = st.sidebar.slider("訓練月數 (Train Window)", min_value=6, max_value=60, value=36, step=6)
-# 預設開始日期調早至 2014-01-31
 target_start_date = st.sidebar.date_input("回測開始日期", pd.to_datetime("2014-01-31"))
 target_end_date = st.sidebar.date_input("回測結束日期", pd.to_datetime("2026-12-31"))
 
@@ -298,11 +293,11 @@ if st.session_state.get("prediction_executed", False):
             mcol3.metric("預測目標結算日", latest_target_date, f"模型: {'LightGBM' if HAS_LGB else 'RidgeCV'}")
 
         # -------------------------------------------------------------
-        # 📊 使用 Plotly 繪製互動式圖表 (修正上方文字重疊與標示不清問題)
+        # 📊 使用 Plotly 繪製互動式圖表 (徹底解決標題與圖例重疊)
         # -------------------------------------------------------------
         valid_chart_df = results_df.dropna(subset=["Predicted", "Current_TYX"]).copy()
         if not valid_chart_df.empty:
-            if mode_val == "TLT + 現金 (单向多头)":
+            if mode_val.startswith("TLT + 現金"):
                 valid_chart_df["Signal"] = np.where(valid_chart_df["Predicted"] < valid_chart_df["Current_TYX"], 1, 0)
             else:
                 valid_chart_df["Signal"] = np.where(valid_chart_df["Predicted"] < valid_chart_df["Current_TYX"], 1, -1)
@@ -312,14 +307,14 @@ if st.session_state.get("prediction_executed", False):
             # 1. 實際利率線
             fig.add_trace(go.Scatter(
                 x=valid_chart_df["Target_Date"], y=valid_chart_df["Current_TYX"],
-                mode='lines', name='實際 30 年公債利率 (Current TYX)',
+                mode='lines', name='實際利率 (Current TYX)',
                 line=dict(color='#00d2ff', width=2.5)
             ))
 
             # 2. 預測利率線
             fig.add_trace(go.Scatter(
                 x=valid_chart_df["Target_Date"], y=valid_chart_df["Predicted"],
-                mode='lines', name=f'機器學習預測值 (+{horizon_val}M)',
+                mode='lines', name=f'預測值 (+{horizon_val}M)',
                 line=dict(color='#ff9900', width=2, dash='dot')
             ))
 
@@ -328,27 +323,22 @@ if st.session_state.get("prediction_executed", False):
             if not buy_df.empty:
                 fig.add_trace(go.Scatter(
                     x=buy_df["Target_Date"], y=buy_df["Current_TYX"],
-                    mode='markers', name='🟢 買入 TLT (預期利率降)',
-                    marker=dict(color='#00ff66', size=10, symbol='triangle-up')
+                    mode='markers', name='🟢 買入 TLT',
+                    marker=dict(color='#00ff66', size=9, symbol='triangle-up')
                 ))
 
             # 4. 標示 TBT 或平倉時點 (Signal <= 0)
             sell_df = valid_chart_df[valid_chart_df["Signal"] <= 0]
             if not sell_df.empty:
-                label_name = '🔴 買入 TBT (預期利率升)' if mode_val.startswith("TLT + TBT") else '🔴 平倉/現金 (預期利率升)'
+                label_name = '🔴 買入 TBT' if mode_val.startswith("TLT + TBT") else '🔴 平倉/現金'
                 fig.add_trace(go.Scatter(
                     x=sell_df["Target_Date"], y=sell_df["Current_TYX"],
                     mode='markers', name=label_name,
-                    marker=dict(color='#ff3333', size=10, symbol='triangle-down')
+                    marker=dict(color='#ff3333', size=9, symbol='triangle-down')
                 ))
 
-            # 修正版面與邊距配置，徹底解決上方文字重疊問題
+            # 移除 Plotly 內建標題，改用 Streamlit markdown 標示，圖例移至下方並垂直排列或分行，徹底避開重疊
             fig.update_layout(
-                title=dict(
-                    text=f"美國 30 年期公債殖利率與策略進出點標示 (預測天期: +{horizon_val}M)", 
-                    font=dict(color='white', size=16),
-                    x=0.0, y=0.95
-                ),
                 xaxis=dict(title="日期", gridcolor='#222629'),
                 yaxis=dict(title="殖利率 (%)", gridcolor='#222629'),
                 paper_bgcolor='#0e1117',
@@ -356,18 +346,20 @@ if st.session_state.get("prediction_executed", False):
                 font=dict(color='white'),
                 legend=dict(
                     orientation="h", 
-                    yanchor="bottom", 
-                    y=1.12,  # 將圖例往上推，避免與圖表標題重疊
-                    xanchor="left", 
-                    x=0.0,
+                    yanchor="top", 
+                    y=-0.15,  # 放在圖表下方外側，絕不與上方重疊
+                    xanchor="center", 
+                    x=0.5,
                     bgcolor='rgba(0,0,0,0)'
                 ),
-                margin=dict(l=40, r=40, t=100, b=40)  # 增加上方邊距 (t=100) 給圖例跟標題空間
+                margin=dict(l=40, r=40, t=20, b=80)
             )
 
             st.plotly_chart(fig, use_container_width=True)
 
-        # 3. 計算歷史勝率與期望值
+        # -------------------------------------------------------------
+        # 📊 模型表現、勝率與預測期望值摘要
+        # -------------------------------------------------------------
         valid_eval = results_df.dropna(subset=["Actual", "Predicted", "Current_TYX"]).copy()
         if not valid_eval.empty:
             mse = np.mean((valid_eval["Actual"] - valid_eval["Predicted"]) ** 2)
@@ -400,7 +392,7 @@ if st.session_state.get("prediction_executed", False):
         col4.metric("均方根誤差 (RMSE)", f"{rmse:.3f}%")
 
         # -------------------------------------------------------------
-        # 🚀 債券策略回測引擎與績效呈現
+        # 💰 債券策略回測引擎與績效呈現
         # -------------------------------------------------------------
         st.markdown(f'<div class="section-header">💰 債券策略回測淨值曲線與績效表現 [{mode_val}]</div>', unsafe_allow_html=True)
         
@@ -409,7 +401,7 @@ if st.session_state.get("prediction_executed", False):
             tlt_ret = backtest_df["TLT_Price"].pct_change()
             tbt_ret = backtest_df["TBT_Price"].pct_change()
 
-            if mode_val == "TLT + 現金 (單向多頭)":
+            if mode_val.startswith("TLT + 現金"):
                 backtest_df["Signal"] = np.where(backtest_df["Predicted"] < backtest_df["Current_TYX"], 1, 0)
                 backtest_df["Strategy_Return"] = backtest_df["Signal"].shift(1) * tlt_ret
                 benchmark_ret = tlt_ret
@@ -435,19 +427,3 @@ if st.session_state.get("prediction_executed", False):
             strat_rolling_max = backtest_df["Strategy_Nav"].cummax()
             strat_drawdown = (backtest_df["Strategy_Nav"] - strat_rolling_max) / strat_rolling_max
             strat_mdd = strat_drawdown.min()
-
-            bench_rolling_max = backtest_df["Benchmark_Nav"].cummax()
-            bench_drawdown = (backtest_df["Benchmark_Nav"] - bench_rolling_max) / bench_rolling_max
-            bench_mdd = bench_drawdown.min()
-
-            pcol1, pcol2, pcol3, pcol4 = st.columns(4)
-            pcol1.metric("策略年化報酬率 (CAGR)", f"{strat_cagr * 100:.2f}%", f"基准(TLT): {bench_cagr * 100:.2f}%")
-            pcol2.metric("策略總報酬率", f"{strat_total_return * 100:.2f}%", f"基准: {bench_total_return * 100:.2f}%")
-            pcol3.metric("策略最大回落 (MDD)", f"{strat_mdd * 100:.2f}%", f"基准: {bench_mdd * 100:.2f}%")
-            pcol4.metric("回測期間", f"{years:.1f} 年", f"{len(backtest_df)} 個交易點")
-
-            nav_chart_df = backtest_df[["Strategy_Nav", "Benchmark_Nav"]].copy()
-            nav_chart_df.columns = [f"策略淨值曲線 ({mode_val})", "TLT 買入持有 (Benchmark)"]
-            st.line_chart(nav_chart_df)
-        else:
-            st.warning("⚠️ 目前回測期間資料不足，無法計算策略績效。")
