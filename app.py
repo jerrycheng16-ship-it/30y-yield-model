@@ -46,7 +46,7 @@ st.markdown(
 st.markdown('<div class="main-title">🇺🇸 美國 30 年期公債殖利率多期預測系統 (含 TLT/TBT 多空雙向策略回測)</div>', unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 側邊欄參數與預測天期設定
+# 側邊欄參數與預測天期設定 (已設定您指定的新預設值)
 # -------------------------------------------------------------
 st.sidebar.header("⚙️ API 與回測參數設定")
 
@@ -61,20 +61,24 @@ fred_api_key = st.sidebar.text_input("FRED API Key (必填)", type="password", v
 if not fred_api_key:
     st.sidebar.warning("⚠️ 請先輸入您的 FRED API Key 方可正確載入真實總經數據。")
 
+# 預設值：預測未來 3 個月
 forecast_horizon = st.sidebar.selectbox("選擇預測天期 (Horizon)", options=[3, 1], format_func=lambda x: f"預測未來 {x} 個月")
 
+# 預設值：TLT + TBT (多空雙向切換)
 strategy_mode = st.sidebar.selectbox(
     "選擇債券策略模式", 
     options=["TLT + TBT (多空雙向切換)", "TLT + 現金 (單向多頭)"],
     index=0
 )
 
+# 預設值：絕對水準 (Level)
 macro_feature_type = st.sidebar.selectbox(
     "總經特徵呈現方式",
     options=["絕對水準 (Level)", "月變動量 (Delta / Diff)"],
     index=0
 )
 
+# 預設值：12 個月動能 (Mom12M)
 momentum_window = st.sidebar.selectbox(
     "跨資產動能計算週期",
     options=[12, 6, 3, 1],
@@ -83,6 +87,7 @@ momentum_window = st.sidebar.selectbox(
 )
 
 train_window = st.sidebar.slider("訓練月數 (Train Window)", min_value=6, max_value=60, value=36, step=6)
+# 預設開始日期調早至 2014-01-31
 target_start_date = st.sidebar.date_input("回測開始日期", pd.to_datetime("2014-01-31"))
 target_end_date = st.sidebar.date_input("回測結束日期", pd.to_datetime("2026-12-31"))
 
@@ -337,7 +342,6 @@ if st.session_state.get("prediction_executed", False):
                     marker=dict(color='#ff3333', size=9, symbol='triangle-down')
                 ))
 
-            # 移除 Plotly 內建標題，改用 Streamlit markdown 標示，圖例移至下方並垂直排列或分行，徹底避開重疊
             fig.update_layout(
                 xaxis=dict(title="日期", gridcolor='#222629'),
                 yaxis=dict(title="殖利率 (%)", gridcolor='#222629'),
@@ -347,7 +351,7 @@ if st.session_state.get("prediction_executed", False):
                 legend=dict(
                     orientation="h", 
                     yanchor="top", 
-                    y=-0.15,  # 放在圖表下方外側，絕不與上方重疊
+                    y=-0.15, 
                     xanchor="center", 
                     x=0.5,
                     bgcolor='rgba(0,0,0,0)'
@@ -478,3 +482,32 @@ if st.session_state.get("prediction_executed", False):
             f"預測目標月份 (+{horizon_val}M)", "當月基準實際利率", "目標期實際利率", "預測殖利率", "策略訊號動作 (進出點)", "方向預測結果"
         ]
         st.dataframe(final_display_df.round(3), use_container_width=True)
+
+        # -------------------------------------------------------------
+        # 🔍 每月參數影響程度與關鍵影響因子分析表
+        # -------------------------------------------------------------
+        st.markdown(f'<div class="section-header">🔍 每月參數影響程度與關鍵影響因子分析</div>', unsafe_allow_html=True)
+        
+        impact_df = results_df.set_index(results_df["Target_Date"].dt.strftime("%Y-%m-%d"))[[f"{col}_Impact" for col in feature_cols]].copy()
+        impact_df.columns = feature_cols
+        
+        if not impact_df.empty and not impact_df.isna().all().all():
+            try:
+                max_vals = impact_df.abs().max(axis=1)
+                valid_rows = max_vals > 0
+                max_impact_col = pd.Series("資料收集中", index=impact_df.index)
+                if valid_rows.any():
+                    max_impact_col.loc[valid_rows] = impact_df.loc[valid_rows].abs().idxmax(axis=1)
+                impact_df["影響力最大主因"] = max_impact_col
+            except Exception:
+                impact_df["影響力最大主因"] = "資料收集中"
+        else:
+            impact_df["影響力最大主因"] = "資料收集中"
+
+        final_impact_display = impact_df[["影響力最大主因"] + feature_cols].copy()
+        final_impact_display.columns = ["影響力最大主因"] + [
+            "失業率(Unrate)", "5年通膨預期(T5YIE)", "WEI週經濟", 
+            f"S&P500動能({mom_val}M)", f"美元動能({mom_val}M)", f"黃金動能({mom_val}M)",
+            "RSI(10)", "RSI(20)", "MACD差值", "MOVE波動率"
+        ]
+        st.dataframe(final_impact_display.round(3), use_container_width=True)
