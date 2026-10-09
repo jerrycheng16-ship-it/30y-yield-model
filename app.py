@@ -379,4 +379,66 @@ if st.session_state.get("prediction_executed", False):
             pcol1, pcol2, pcol3, pcol4 = st.columns(4)
             pcol1.metric("策略年化報酬率 (CAGR)", f"{strat_cagr * 100:.2f}%", f"基准(TLT): {bench_cagr * 100:.2f}%")
             pcol2.metric("策略總報酬率", f"{strat_total_return * 100:.2f}%", f"基准: {bench_total_return * 100:.2f}%")
-            pcol3.metric("策略最大回落 (MDD)", f"{strat_mdd * 100:.2f}%", f"基准: {bench_mdd *
+            pcol3.metric("策略最大回落 (MDD)", f"{strat_mdd * 100:.2f}%", f"基准: {bench_mdd * 100:.2f}%")
+            pcol4.metric("回測期間", f"{years:.1f} 年", f"{len(backtest_df)} 個交易點")
+
+            nav_chart_df = backtest_df[["Strategy_Nav", "Benchmark_Nav"]].copy()
+            nav_chart_df.columns = [f"策略淨值曲線 ({mode_val})", "TLT 買入持有 (Benchmark)"]
+            st.line_chart(nav_chart_df)
+        else:
+            st.warning("⚠️ 目前回測期間資料不足，無法計算策略績效。")
+
+        # 1. 每月明細表
+        st.markdown(f'<div class="section-header">📅 每月輸入參數與「未來 {horizon_val} 個月預測」明細表</div>', unsafe_allow_html=True)
+        
+        show_table_df = results_df[[
+            "Target_Date", "Current_TYX", "Actual", "Predicted", 
+            "Unemployment_Rate_Value", "Inflation_Expectation_Value", "WEI_Value",
+            "RSI_10_Value", "MACD_Diff_Value", "Volatility_MOVE_Value"
+        ]].copy()
+
+        show_table_df["Pred_Dir"] = show_table_df["Predicted"] > show_table_df["Current_TYX"]
+        show_table_df["Actual_Dir"] = show_table_df["Actual"] > show_table_df["Current_TYX"]
+        show_table_df["方向勝率判斷"] = np.where(
+            show_table_df["Actual"].isna() | show_table_df["Predicted"].isna(),
+            "⏳ 最新即時預測 (待揭曉)",
+            np.where(show_table_df["Pred_Dir"] == show_table_df["Actual_Dir"], "✅ 正確 (Hit)", "❌ 錯誤 (Miss)")
+        )
+        
+        show_table_df["Target_Date"] = pd.to_datetime(show_table_df["Target_Date"]).dt.strftime("%Y-%m-%d")
+        show_table_df.index = show_table_df.index.strftime("%Y-%m-%d")
+        
+        final_display_df = show_table_df[[
+            "Target_Date", "Current_TYX", "Actual", "Predicted", "方向勝率判斷",
+            "Unemployment_Rate_Value", "Inflation_Expectation_Value", "WEI_Value",
+            "RSI_10_Value", "MACD_Diff_Value", "Volatility_MOVE_Value"
+        ]].copy()
+
+        final_display_df.columns = [
+            f"預測目標月份 (+{horizon_val}M)", "當月基準實際利率", "目標期實際利率", "預測殖利率", "方向預測結果",
+            "失業率變動(%)" if feat_type_val.startswith("月變動量") else "失業率(%)", 
+            "5年通膨預期變動(%)" if feat_type_val.startswith("月變動量") else "5年通膨預期(%)", 
+            "WEI週經濟變動" if feat_type_val.startswith("月變動量") else "WEI週經濟", 
+            "RSI(10)", "MACD乖離", "MOVE波動率"
+        ]
+        st.dataframe(final_display_df.round(3), use_container_width=True)
+
+        # 2. 影響力分析
+        st.markdown(f'<div class="section-header">🔍 每月參數影響程度分析</div>', unsafe_allow_html=True)
+        impact_df = results_df.set_index(results_df["Target_Date"].dt.strftime("%Y-%m-%d"))[[f"{col}_Impact" for col in feature_cols]].copy()
+        impact_df.columns = feature_cols
+        
+        if not impact_df.empty and not impact_df.isna().all().all():
+            try:
+                max_vals = impact_df.abs().max(axis=1)
+                valid_rows = max_vals > 0
+                max_impact_col = pd.Series("資料收集中", index=impact_df.index)
+                if valid_rows.any():
+                    max_impact_col.loc[valid_rows] = impact_df.loc[valid_rows].abs().idxmax(axis=1)
+                impact_df["影響力最大主因"] = max_impact_col
+            except Exception:
+                impact_df["影響力最大主因"] = "資料收集中"
+        else:
+            impact_df["影響力最大主因"] = "資料收集中"
+
+        st.dataframe(impact_df.round(3), use_container_width=True)
