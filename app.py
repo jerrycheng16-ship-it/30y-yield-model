@@ -427,3 +427,54 @@ if st.session_state.get("prediction_executed", False):
             strat_rolling_max = backtest_df["Strategy_Nav"].cummax()
             strat_drawdown = (backtest_df["Strategy_Nav"] - strat_rolling_max) / strat_rolling_max
             strat_mdd = strat_drawdown.min()
+
+            bench_rolling_max = backtest_df["Benchmark_Nav"].cummax()
+            bench_drawdown = (backtest_df["Benchmark_Nav"] - bench_rolling_max) / bench_rolling_max
+            bench_mdd = bench_drawdown.min()
+
+            pcol1, pcol2, pcol3, pcol4 = st.columns(4)
+            pcol1.metric("策略年化報酬率 (CAGR)", f"{strat_cagr * 100:.2f}%", f"基准(TLT): {bench_cagr * 100:.2f}%")
+            pcol2.metric("策略總報酬率", f"{strat_total_return * 100:.2f}%", f"基准: {bench_total_return * 100:.2f}%")
+            pcol3.metric("策略最大回落 (MDD)", f"{strat_mdd * 100:.2f}%", f"基准: {bench_mdd * 100:.2f}%")
+            pcol4.metric("回測期間", f"{years:.1f} 年", f"{len(backtest_df)} 個交易點")
+
+            nav_chart_df = backtest_df[["Strategy_Nav", "Benchmark_Nav"]].copy()
+            nav_chart_df.columns = [f"策略淨值曲線 ({mode_val})", "TLT 買入持有 (Benchmark)"]
+            st.line_chart(nav_chart_df)
+        else:
+            st.warning("⚠️ 目前回測期間資料不足，無法計算策略績效。")
+
+        # -------------------------------------------------------------
+        # 📅 每月預測與交易策略訊號明細表
+        # -------------------------------------------------------------
+        st.markdown(f'<div class="section-header">📅 每月預測與交易策略訊號明細表</div>', unsafe_allow_html=True)
+        
+        show_table_df = results_df[[
+            "Target_Date", "Current_TYX", "Actual", "Predicted"
+        ]].copy()
+
+        show_table_df["預測利率降息(買入TLT)"] = show_table_df["Predicted"] < show_table_df["Current_TYX"]
+        if mode_val.startswith("TLT + 現金"):
+            show_table_df["策略訊號動作"] = np.where(show_table_df["預測利率降息(買入TLT)"], "🟢 買入並持有 TLT", "🔴 平倉 / 持有現金")
+        else:
+            show_table_df["策略訊號動作"] = np.where(show_table_df["預測利率降息(買入TLT)"], "🟢 買入 TLT (多頭)", "🔴 買入 TBT (空頭)")
+
+        show_table_df["Pred_Dir"] = show_table_df["Predicted"] > show_table_df["Current_TYX"]
+        show_table_df["Actual_Dir"] = show_table_df["Actual"] > show_table_df["Current_TYX"]
+        show_table_df["方向勝率判斷"] = np.where(
+            show_table_df["Actual"].isna() | show_table_df["Predicted"].isna(),
+            "⏳ 最新即時預測 (待揭曉)",
+            np.where(show_table_df["Pred_Dir"] == show_table_df["Actual_Dir"], "✅ 正確 (Hit)", "❌ 錯誤 (Miss)")
+        )
+        
+        show_table_df["Target_Date"] = pd.to_datetime(show_table_df["Target_Date"]).dt.strftime("%Y-%m-%d")
+        show_table_df.index = show_table_df.index.strftime("%Y-%m-%d")
+        
+        final_display_df = show_table_df[[
+            "Target_Date", "Current_TYX", "Actual", "Predicted", "策略訊號動作", "方向勝率判斷"
+        ]].copy()
+
+        final_display_df.columns = [
+            f"預測目標月份 (+{horizon_val}M)", "當月基準實際利率", "目標期實際利率", "預測殖利率", "策略訊號動作 (進出點)", "方向預測結果"
+        ]
+        st.dataframe(final_display_df.round(3), use_container_width=True)
